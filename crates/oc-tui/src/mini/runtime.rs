@@ -380,8 +380,11 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         // G-272 — the hydrate's blocker sweep runs on EVERY connect
         // (`hydrate`, transport.ts:952-1004): `--no-replay` skips the
         // transcript render, never the pending permission/form
-        // restoration.
-        hydrate_blockers(&mut lifecycle, &client, &session_id, &mut transport).await;
+        // restoration. G-536: the connect fetches its own active map
+        // (the ref's Promise.all leg) for the root-active phase.
+        let active = client.session().active().await.ok();
+        hydrate_blockers(&mut lifecycle, &client, &session_id, &mut transport, active.as_ref())
+            .await;
     }
 
     // The stream transport (`ensureStream`, `runtime.ts:776-831`):
@@ -716,7 +719,15 @@ impl Runtime {
             FooterEffect::AgentSelect(agent) => {
                 self.next_agent = Some(agent.clone());
                 self.turn_agent = Some(agent.clone());
-                self.lifecycle.append(Commit::system(&format!("agent {agent}")));
+                // G-535 — the notice's LABEL face (`agent ${this.
+                // currentAgent()}`, footer.ts:879): the resolved
+                // agent NAME (`Locale.titlecase` of the id when
+                // unresolvable — footer.ts:275-280), never the raw id.
+                let label = crate::components::footer::state::current_agent_label(
+                    &self.agents,
+                    Some(agent.as_str()),
+                );
+                self.lifecycle.append(Commit::system(&format!("agent {label}")));
             }
             // G-272 — the model panel's pick (`switchModel` before
             // the next turn); the label feeds the footer + turn
@@ -1350,7 +1361,16 @@ impl Runtime {
         // lands in the scrollback after every settled turn unless
         // `mini.turn_summary` is "hide".
         if self.settings.turn_summary {
-            let agent = self.turn_agent.clone().unwrap_or_else(|| "Build".to_owned());
+            // G-535 — the agent face is `currentAgent()`'s label
+            // (footer.ts:455 `this.turnAgent ?? this.currentAgent()`
+            // over :275-280): the resolved agent NAME, the
+            // `\b\w`-titlecased id when unresolvable, else the first
+            // selectable catalog agent's name ("Build" on the default
+            // config) / "Default" on an empty catalog.
+            let agent = crate::components::footer::state::current_agent_label(
+                &self.agents,
+                self.turn_agent.as_deref(),
+            );
             let model = self.turn_model.clone().unwrap_or_else(|| "default".to_owned());
             #[allow(clippy::cast_possible_truncation)]
             let duration = crate::components::message::model::locale_duration(
@@ -1388,20 +1408,37 @@ async fn replay_history(
         ..Default::default()
     };
     let Ok(page) = client.message().list(session_id, &query).await else { return };
+    // G-536 — the ref's hydrate fetches `session.active` BESIDE the
+    // projected messages (transport.ts:955-969's Promise.all) and
+    // hands the map to the subagent hydrate (`subagents.hydrate({
+    // messages, active, … })`, :990-996): the mainTool walk's
+    // status arm and the closing pass below both read it, and the
+    // parent's root-active phase consumes the SAME map
+    // (`state.rootActive`, :988).
+    let active = client.session().active().await.ok();
     let mut messages = page.data;
     messages.reverse();
     for (index, message) in messages.iter().enumerate() {
         let Ok(value) = serde_json::to_value(message) else { continue };
+        // G-541 — the wire message rows carry their parts under
+        // `content` (the projected message shape, `message.list` — the
+        // ref's renderMessage reads `message.content`,
+        // stream-v2.transport.ts:845-849; `projectedMessages` hands
+        // the rows through verbatim, :901-907). The pre-fix port read
+        // a nonexistent `parts` field — the whole replay walk was
+        // dead against the real wire (only unit fixtures in the SSE
+        // event shape ever exercised it).
+        let content = value.get("content").and_then(Value::as_array);
         // G-529 — the hydrate's `mainTool` walk (stream-v2.subagent.
         // ts:1038-1043): every PROJECTED subagent tool part admits its
         // child + applies the tool input's agent/description (the
         // UNCONDITIONAL :286 site). Runs BEFORE the commit projection
         // so a same-event snapshot stays coherent.
-        if value.get("role").and_then(Value::as_str) == Some("assistant") {
-            if let Some(parts) = value.get("parts").and_then(Value::as_array) {
+        if value.get("type").and_then(Value::as_str) == Some("assistant") {
+            if let Some(parts) = content {
                 for part in parts {
                     if part.get("type").and_then(Value::as_str) == Some("tool") {
-                        subagents.fold_tool_part(part);
+                        subagents.fold_tool_part(part, active.as_ref());
                     }
                 }
             }
@@ -1447,6 +1484,17 @@ async fn replay_history(
             }
         }
     }
+    // G-536 — the hydrate's CLOSING pass (stream-v2.subagent.ts:
+    // 1079-1084): children admitted Running (the admit default —
+    // neither the tool-part walk's metadata arm nor the family rows
+    // carry a settled state) whose sessionID is NOT in the active map
+    // settle Completed; a fetch failure skips the pass (the ref's
+    // Promise.all aborts the whole hydrate on a failed active fetch).
+    // Without it a resume/reconnect renders phantom `N sub`/`bg`
+    // hints and the subagent menu's ACTIVE tab lists settled children.
+    if let Some(active) = active.as_ref() {
+        subagents.settle_against_active(active);
+    }
     // G-221 — the hydrate's inbox seed (`client.session.inbox.list`,
     // transport.ts:955-977): the pending list lands in the transport
     // (a later `delivered` knows the row's text) and the footer's
@@ -1471,28 +1519,33 @@ async fn replay_history(
     // form.list + session.active the ref issues beside the message
     // walk — pending asks remount as footer blockers
     // (`syncBlockers`) and a still-running session keeps the running
-    // phase (`state.rootActive`).
-    hydrate_blockers(lifecycle, client, session_id, transport).await;
+    // phase (`state.rootActive`). G-536: the replay feed hands its
+    // PRE-FETCHED active map in (the ref's single Promise.all fetch);
+    // the no-replay connect fetches its own.
+    hydrate_blockers(lifecycle, client, session_id, transport, active.as_ref()).await;
 }
 
 /// G-272 — the hydrate's parallel blocker fetch (`hydrate`,
 /// transport.ts:952-1004): `permission.list` + `form.list` +
 /// `session.active` → the footer machine's blocker queues and the
 /// root-active phase. A blocker that re-mounts here behaves exactly
-/// like its live event (the machine dedups by id).
+/// like its live event (the machine dedups by id). The active map is
+/// CALLER-SUPPLIED (the replay feed's G-536 fetch or the no-replay
+/// connect's own); `None` skips the root-active phase (the ref's
+/// hydrate aborts on a failed fetch — the port degrades the same leg).
 async fn hydrate_blockers(
     lifecycle: &mut Lifecycle,
     client: &Client,
     session_id: &str,
     transport: &mut TransportState,
+    active: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
 ) {
     // Bind the API handles (the futures must outlive the builders).
     let session = client.session();
     let forms_api = session.form();
-    let (permissions, forms, active) = tokio::join!(
+    let (permissions, forms) = tokio::join!(
         session.permission_list(session_id),
         forms_api.list(session_id),
-        session.active(),
     );
     if let Ok(permissions) = permissions {
         for wire in &permissions {
@@ -1511,7 +1564,7 @@ async fn hydrate_blockers(
             }
         }
     }
-    if let Ok(active) = active {
+    if let Some(active) = active {
         // `state.rootActive = input.sessionID in active` (the
         // post-hydrate `write([], { phase: "running" })`).
         transport.set_running(active.contains_key(session_id));
@@ -1541,7 +1594,11 @@ fn replay_message_commits(
         value.get(key).and_then(Value::as_str).unwrap_or_default().to_owned()
     }
     let mut commits = Vec::new();
-    let parts = value.get("parts").and_then(Value::as_array).cloned().unwrap_or_default();
+    // G-541 — the wire rows' parts live under `content` (the ref's
+    // `message.content` reads, stream-v2.transport.ts:845-849; the
+    // pre-fix port read a nonexistent `parts` field — the replay walk
+    // produced zero commits against the real wire).
+    let parts = value.get("content").and_then(Value::as_array).cloned().unwrap_or_default();
     let kind = value.get("type").and_then(Value::as_str).unwrap_or_default();
     let role = value.get("role").and_then(Value::as_str).unwrap_or_default();
     let message_id = value
@@ -2184,7 +2241,7 @@ mod tests {
         // A user message with an image file: text row + image commit.
         let user = serde_json::json!({
             "id": "msg_u1", "type": "user",
-            "parts": [{ "type": "text", "text": "look" }],
+            "content": [{ "type": "text", "text": "look" }],
             "files": [{ "mime": "image/png", "data": "AAEC", "name": "shot.png" }],
         });
         let commits = replay_message_commits(&user, 0, &mut transport, &settings);
@@ -2196,7 +2253,7 @@ mod tests {
         // tools in the message) with the `text:0` part id.
         let assistant = serde_json::json!({
             "id": "msg_a1", "type": "assistant",
-            "parts": [
+            "content": [
                 { "type": "reasoning", "text": "hmm" },
                 { "type": "text", "text": "one two three" },
             ],
@@ -2244,7 +2301,7 @@ mod tests {
         // Tool), and replays dedup.
         let tool = serde_json::json!({
             "id": "msg_a2", "type": "assistant",
-            "parts": [
+            "content": [
                 { "type": "text", "text": "here" },
                 { "type": "tool", "id": "9", "state": { "content": [
                     { "type": "file", "mime": "image/png", "uri": "data:image/png;base64,AAEC", "name": "out.png" },

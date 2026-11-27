@@ -1821,6 +1821,32 @@ pub fn agent_entries(agents: &[RunAgent], current: Option<&str>) -> Vec<FooterMe
         .collect()
 }
 
+/// G-535 — the footer's `currentAgent()` label face (footer.ts:275-280
+/// over `resolveRunAgent`, :111-115): the resolved selectable agent's
+/// NAME; else `Locale.titlecase(selectedAgentID)` when an id is set
+/// but unresolvable; else "Default" — with a catalog and NO id the
+/// first selectable agent's name is the face (the default config's
+/// "Build", `selectable.at(0)`), an empty catalog lands "Default".
+/// Feeds the turn summary's agent (footer.ts:455 → turn-summary.ts:11),
+/// the agent-switch notice (`agent ${…}`, footer.ts:879) and the
+/// statusline's agent group (`agent ${…}`, footer.view.tsx:242). The
+/// panel rows (`RunAgentSelectBody`, footer.command.tsx:645) and the
+/// `switchAgent` transport keep the raw id.
+#[must_use]
+pub fn current_agent_label(agents: &[RunAgent], selected: Option<&str>) -> String {
+    let selectable =
+        || agents.iter().filter(|agent| agent.mode != "subagent" && !agent.hidden);
+    match selected {
+        None => {
+            selectable().next().map_or_else(|| "Default".to_owned(), |agent| agent.name.clone())
+        }
+        Some(id) => selectable().find(|agent| agent.id == id).map_or_else(
+            || crate::components::message::titlecase(id),
+            |agent| agent.name.clone(),
+        ),
+    }
+}
+
 /// The variant-select entries: "Default" (no variant) + the variants.
 #[must_use]
 pub fn variant_entries(variants: &[String], current: Option<&str>) -> Vec<FooterMenuItem> {

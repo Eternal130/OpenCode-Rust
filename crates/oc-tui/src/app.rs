@@ -515,6 +515,19 @@ impl App {
             self.keymap.clear_pending();
             return;
         }
+        // G-538 — a SELECT dialog's focused filter owns the paste the
+        // same way (the ANSI+newline-stripped insert into the filter,
+        // the list re-filters) — `false` when no select-with-input
+        // holds focus (static dialogs, `renderFilter: false`) and the
+        // paste falls through to the composer BEHIND the modal.
+        if crate::components::dialog::paste_into_dialog_select(
+            &self.store,
+            text,
+            self.store.terminal_size(),
+        ) {
+            self.keymap.clear_pending();
+            return;
+        }
         let key = self.prompt_key();
         let mut composer = self.store.composer(&key);
         composer.paste_resolved(

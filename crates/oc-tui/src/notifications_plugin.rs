@@ -41,6 +41,9 @@ impl AttentionSink for Attention {
 /// cache: `session.get(id)` → `{ title, parentID }`) — plus the
 /// subagent picker's fields (#44): `agent` (the entry label's
 /// titlecased prefix) and `created` (the timestamped fallback title).
+/// G-539 — `time.updated` (SessionInfo.time, schema session.ts:
+/// 551-556): the ctx.data session rows carry
+/// `time: { created, updated }` like the ref's synced cache rows.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SessionInfo {
     pub title: Option<String>,
@@ -49,6 +52,10 @@ pub struct SessionInfo {
     pub agent: Option<String>,
     /// `time.created` (epoch ms) — the fallback title's timestamp.
     pub created: Option<u64>,
+    /// `time.updated` (epoch ms) — the last session-lifecycle event's
+    /// time (the wire `info.time.updated` when the event carries one,
+    /// else the envelope's `created`).
+    pub updated: Option<u64>,
 }
 
 /// The plugin's session index — filled from the session lifecycle
@@ -80,7 +87,25 @@ impl SessionIndex {
                     info.title = event.string("title").or_else(|| info.title.take());
                     info.parent_id = event.string("parentID").or_else(|| info.parent_id.take());
                     info.agent = event.string("agent").or_else(|| info.agent.take());
-                    info.created = info.created.or(event.created);
+                    info.created = info
+                        .created
+                        .or(event
+                            .data
+                            .pointer("/info/time/created")
+                            .and_then(serde_json::Value::as_u64))
+                        .or(event.created);
+                    // G-539 — a fresh session's `time.updated` equals
+                    // its creation time (the wire's info.time, or the
+                    // envelope's created when the event carries no
+                    // info payload).
+                    if let Some(updated) = event
+                        .data
+                        .pointer("/info/time/updated")
+                        .and_then(serde_json::Value::as_u64)
+                        .or(event.created)
+                    {
+                        info.updated = Some(updated);
+                    }
                 }
             }
             "session.updated" | "session.renamed" => {
@@ -88,6 +113,17 @@ impl SessionIndex {
                     let info = self.sessions.entry(id).or_default();
                     if let Some(title) = event.string("title") {
                         info.title = Some(title);
+                    }
+                    // G-539 — `time.updated` tracks the session's last
+                    // lifecycle event (the wire's info.time.updated,
+                    // else the envelope's created).
+                    if let Some(updated) = event
+                        .data
+                        .pointer("/info/time/updated")
+                        .and_then(serde_json::Value::as_u64)
+                        .or(event.created)
+                    {
+                        info.updated = Some(updated);
                     }
                 }
             }

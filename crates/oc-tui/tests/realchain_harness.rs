@@ -1834,8 +1834,21 @@ pub fn ref_tui_spawn(sandbox: &Sandbox, stage: &RefStage, cols: u16, rows: u16) 
 /// worktree.
 #[must_use]
 pub fn ref_mini_spawn(sandbox: &Sandbox, stage: &RefStage, cols: u16, rows: u16) -> TuiProcess {
+    ref_mini_spawn_with_args(sandbox, stage, cols, rows, &[])
+}
+
+/// The arg-carrying twin (v21f: the mini resume/agent anchors need
+/// `--continue`/`--agent` on the ref side too).
+#[must_use]
+pub fn ref_mini_spawn_with_args(
+    sandbox: &Sandbox,
+    stage: &RefStage,
+    cols: u16,
+    rows: u16,
+    args: &[&str],
+) -> TuiProcess {
     let mut command = sandbox.command_ref(stage, &stage.bun);
-    command.arg(&stage.entry).arg("mini");
+    command.arg(&stage.entry).arg("mini").args(args);
     command.env("PWD", stage.project.display().to_string());
     spawn_ref_supervisor(sandbox, stage);
     TuiProcess::spawn_command(command, cols, rows)

@@ -86,28 +86,32 @@ impl V21Rig {
         rust_timeout: Duration,
         ref_timeout: Duration,
     ) -> bool {
-        let mut ok = true;
-        let deadline = std::time::Instant::now() + rust_timeout;
-        while std::time::Instant::now() < deadline {
-            if self.rust_tui.screen_text().contains(needle) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        if !self.rust_tui.screen_text().contains(needle) {
-            ok = false;
-        }
-        let deadline = std::time::Instant::now() + ref_timeout;
-        while std::time::Instant::now() < deadline {
-            if self.ref_tui.screen_text().contains(needle) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        if !self.ref_tui.screen_text().contains(needle) {
-            ok = false;
-        }
-        ok
+        // 2026-11-27 slow-audit fix A: wait BOTH ends CONCURRENTLY (the
+        // serial legs doubled the wall-clock — the ref leg only started
+        // after the rust leg's needle landed).
+        std::thread::scope(|scope| {
+            let rust_leg = scope.spawn(move || {
+                let deadline = std::time::Instant::now() + rust_timeout;
+                while std::time::Instant::now() < deadline {
+                    if self.rust_tui.screen_text().contains(needle) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                self.rust_tui.screen_text().contains(needle)
+            });
+            let ref_leg = scope.spawn(move || {
+                let deadline = std::time::Instant::now() + ref_timeout;
+                while std::time::Instant::now() < deadline {
+                    if self.ref_tui.screen_text().contains(needle) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                self.ref_tui.screen_text().contains(needle)
+            });
+            rust_leg.join().unwrap_or(false) && ref_leg.join().unwrap_or(false)
+        })
     }
 }
 

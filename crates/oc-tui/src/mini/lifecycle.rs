@@ -1525,7 +1525,16 @@ impl FooterPane {
                     });
                 }
                 let idle = PromptIdleState {
-                    agent: self.agent.clone().unwrap_or_else(|| "Build".to_owned()),
+                    // G-535 — the statusline's agent group reads
+                    // `currentAgent()`'s label (footer.view.tsx:242
+                    // `agent ${props.currentAgent()}` over footer.ts:
+                    // 275-280): the resolved agent NAME — the raw id
+                    // only feeds the panel rows and the session
+                    // factory (`pane.agent`).
+                    agent: crate::components::footer::state::current_agent_label(
+                        &self.agents,
+                        self.agent.as_deref(),
+                    ),
                     model_label: self
                         .model_label
                         .clone()
@@ -2144,8 +2153,7 @@ impl Lifecycle {
     /// keeps the plain writer (the ref's `mono.ts` gate); styled
     /// commits carry theme colors + syntax highlight through the
     /// styled seam.
-    pub fn append(&mut self, commit: Commit) {
-        let rows = append_rows(
+    pub fn append(&mut self, commit: Commit) {        let rows = append_rows(
             self.mono,
             self.last_commit.as_ref(),
             &commit,

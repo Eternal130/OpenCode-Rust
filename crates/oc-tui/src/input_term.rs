@@ -120,6 +120,24 @@ pub fn opentui_key_to_spec(key: &ParsedKey) -> Option<String> {
     if name.is_empty() {
         return None; // unknown/unmapped sequence
     }
+    // G-537 — the kitty super-modifier survives the spec boundary
+    // (`super+z`/`super+shift+z` are the textarea table's undo/redo
+    // arms, index.bun.js:8803-8804; the ref's ParsedKey carries the
+    // modifier where the port previously flattened a super chord onto
+    // its PLAIN key — a real super+z typed 'z'). Only the pure
+    // super / super+shift family carries through (the ref table has
+    // no ctrl+super arms); `KeyStroke::parse` re-arms the modifier
+    // (keymap/table.rs:80).
+    if !key.ctrl && !key.meta && key.super_key == Some(true) {
+        let shift = if key.shift { "shift+" } else { "" };
+        if let Some(ch) = key_char(name) {
+            return Some(format!("super+{shift}{}", ch.to_ascii_lowercase()));
+        }
+        if matches!(name, "up" | "down" | "left" | "right" | "home" | "end") {
+            return Some(format!("super+{shift}{name}"));
+        }
+        return None;
+    }
     if key.ctrl {
         // Combined chords keep the modifier set (ctrl+alt family).
         let alt = key.meta;
