@@ -224,7 +224,8 @@ fn boot_both(rig: &mut V17Rig) {
     // slow-audit fix A: the boot legs run CONCURRENTLY (the serial
     // two-line form paid the rust boot on top of the ref's slower
     // one).
-    let (rust_settled, ref_settled) = wait_both(&rig.rust_tui, &rig.ref_tui, WORDMARK, 0, 30, 0, 60);
+    let (rust_settled, ref_settled) =
+        wait_both(&rig.rust_tui, &rig.ref_tui, WORDMARK, 0, 30, 0, 60);
     assert!(
         rust_settled && ref_settled,
         "VA17 rig RED: boot rust={rust_settled} ref={ref_settled}; rust screen:\n{}\nref \
@@ -364,16 +365,18 @@ fn v17b_sessions_dialog_faces_pair() {
     // ref's).
     let (rust_replied, ref_replied) =
         wait_hello_turn(&rig.rust_tui, &rig.ref_tui, rust_from, ref_from);
-    // Timeline duty, NOT padding: the PACED reply keeps streaming
-    // past the needle — the stream tail + the composer re-enable must
-    // land before the dialog keys.
+    // Timeline duty, NOT padding: under a T9_PACE override the reply
+    // STREAMS past the needle — the stream tail + the composer
+    // re-enable must land before the dialog keys (under the default
+    // instant pace it is cheap insurance for the same window).
     settle(3);
     // Open the Sessions dialog.
     rig.write_both(b"\x18l");
     let ref_open = rig.ref_tui.wait_for_screen(TITLE_TEXT, Duration::from_secs(10));
-    // Timeline duty, NOT padding: the session rows keep filling past
-    // the title needle — the tab/enter arms below read the full list.
-    settle(2);
+    // The TITLE needle is the ref dialog's own row — the transition
+    // is proven landed; the rust end's open+fill is absorbed by its
+    // capture's 10s poll cap (the serial settle(2) this replaces was
+    // approximation padding).
     export_state(&rig, "v17b", "sessions");
     // Candidate 1 (sessions face): tab focuses the footer action row
     // (pin/unpin, delete), return TRIGGERS it on ref — the selected
@@ -393,12 +396,13 @@ fn v17b_sessions_dialog_faces_pair() {
     // pin/delete — ctrl+r falls through.
     rig.write_both(b"\x18l");
     let ref_reopen = rig.ref_tui.wait_for_screen(TITLE_TEXT, Duration::from_secs(10));
-    settle(2); // the reopen's list fill (same window as the first open)
-    rig.write_both(b"\x12"); // ctrl+r
+    // Same as the first open: the needle proves the ref's reopen; the
+    // rust end's reopen+fill rides its capture's poll cap.
     // The ref's rename-dialog mount is needle-gated (the v19rn
     // needle "Rename session" — the serial settle(2) this replaces
     // only approximated it); the rust end's ctrl+r is a fallthrough
     // (no screen change to wait out).
+    rig.write_both(b"\x12"); // ctrl+r
     if !rig.ref_tui.wait_for_screen("Rename session", Duration::from_secs(10)) {
         eprintln!("V17B note: the ref rename dialog did not open within its 10s window");
     }
@@ -415,9 +419,9 @@ fn v17b_sessions_dialog_faces_pair() {
     std::thread::sleep(Duration::from_millis(250));
     export_state_now(&rig, "v17b", "sessions-search-mid");
     // Timeline duty, NOT padding: the ref's dialog search rides the
-    // PACED gateway — the searching face resolves to no-match only
-    // after the paced round-trip (the v21b toast-dwell lesson: this
-    // window IS the state machine).
+    // gateway — the searching face resolves to no-match only after
+    // the round-trip (the v21b toast-dwell lesson: this window IS
+    // the state machine).
     settle(3);
     export_state(&rig, "v17b", "sessions-search-settled");
     // Close everything back to home (ref: filter esc / dialog esc;
@@ -426,9 +430,11 @@ fn v17b_sessions_dialog_faces_pair() {
     // dialog's own rows too, so a positive needle would false-fire
     // before the escs process.
     rig.write_both(b"\x1b");
-    settle(1); // the filter-clear repaint
+    // the filter-clear repaint
+    settle(1);
     rig.write_both(b"\x1b");
-    settle(2); // the dialog-close → home repaint (the tabmenu target)
+    // the dialog-close → home repaint (the tabmenu target)
+    settle(2);
     // TabMenu bookkeeping frame: right-click the session tab (top
     // strip) — the row context menu's first column rides the export.
     let rust_tab = find_on_screen(&rig.rust_tui, TITLE_TEXT);
@@ -477,8 +483,10 @@ fn v17c_export_dialog_pair() {
     // slow-audit fix A: the reply/title legs run CONCURRENTLY.
     let (rust_replied, ref_replied) =
         wait_hello_turn(&rig.rust_tui, &rig.ref_tui, rust_from, ref_from);
-    // Timeline duty, NOT padding: the PACED reply's stream tail +
-    // composer re-enable land here (same window as v17b's).
+    // Timeline duty, NOT padding: under a T9_PACE override the reply
+    // STREAMS past the needle — the stream tail + the composer
+    // re-enable must land before the dialog keys (under the default
+    // instant pace it is cheap insurance for the same window).
     settle(3);
     // `<leader>x` opens the export options on both ends (the ref pill
     // box, the rust select rows — both titled "Export session").
@@ -486,7 +494,9 @@ fn v17c_export_dialog_pair() {
     // slow-audit fix A: the open legs run CONCURRENTLY.
     let (rust_open, ref_open) =
         wait_both_screens(&rig.rust_tui, &rig.ref_tui, "Export session", 10, 15);
-    settle(2);
+    // The BOTH-END needle proves the mounts landed — the serial
+    // settle(2) this replaces was approximation padding (the pill/row
+    // fill is a single local commit past the title).
     export_state(&rig, "v17c", "export-open");
     // Candidate 6: tab — ref cycles the active pill (markdown → json),
     // the rust pump's own reading rides the export.
@@ -561,15 +571,20 @@ fn v17d_diff_viewer_faces_pair() {
     rig.write_both(b"\r");
     let _ = wait_both_screens(&rig.rust_tui, &rig.ref_tui, "Base branch", 15, 15);
     export_state(&rig, "v17d", "diff-base-empty");
-    // Back out to home: the three escs are event-ordered (the PTY
-    // preserves input order — the state transitions complete before
-    // the next palette key reads them), so the intermediate 1s pads
-    // were pure spacing padding (cut); the trailing settle is the
-    // route-exit paint buffer.
+    // Back out to home. The escs MUST stay spaced: a lone ESC is
+    // prefix-ambiguous in the input stream — back-to-back ESCs
+    // coalesce into alt-esc combos (the dialogs then never close and
+    // the next arm's filter text lands in the wrong field; verified
+    // by the false-EXACT route-git export of the unspaced attempt).
     rig.write_both(b"\x1b");
-    rig.write_both(b"\x1b");
-    rig.write_both(b"\x1b");
+    // ESC-parse disambiguation (closes the base dialog)
     settle(1);
+    rig.write_both(b"\x1b");
+    // ESC-parse disambiguation (closes the source dialog)
+    settle(1);
+    rig.write_both(b"\x1b");
+    // the route-exit → home repaint (the re-entry target)
+    settle(2);
     // Seed a real repo on BOTH projects (data state): a commit plus a
     // `dev` branch, so DiffBase carries rows and the search field.
     for project in [&rig.rust.project, &rig.refbox.project] {
@@ -808,7 +823,8 @@ fn v17f_mention_dedup_pair() {
     settle(1);
     rig.write_both(b"dup");
     // slow-audit fix A: the listing legs run CONCURRENTLY.
-    let (rust_listed, ref_listed) = wait_both_screens(&rig.rust_tui, &rig.ref_tui, "dup.txt", 15, 25);
+    let (rust_listed, ref_listed) =
+        wait_both_screens(&rig.rust_tui, &rig.ref_tui, "dup.txt", 15, 25);
     settle(1);
     export_state_now(&rig, "v17f", "mention-complete");
     rig.write_both(b"\r");

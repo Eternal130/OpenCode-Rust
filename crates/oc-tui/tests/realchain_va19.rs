@@ -231,7 +231,8 @@ fn boot_both(rig: &mut V19Rig) {
     // slow-audit fix A: the boot legs run CONCURRENTLY (the serial
     // two-line form paid the rust boot on top of the ref's slower
     // one).
-    let (rust_settled, ref_settled) = wait_both(&rig.rust_tui, &rig.ref_tui, WORDMARK, 0, 30, 0, 60);
+    let (rust_settled, ref_settled) =
+        wait_both(&rig.rust_tui, &rig.ref_tui, WORDMARK, 0, 30, 0, 60);
     assert!(
         rust_settled && ref_settled,
         "VA19 rig RED: boot rust={rust_settled} ref={ref_settled}; rust screen:\n{}\nref \
@@ -403,9 +404,10 @@ fn hello_turn(rig: &mut V19Rig) {
         rust_replied && ref_replied,
         "VA19 rig RED: hello turn rust={rust_replied} ref={ref_replied}"
     );
-    // Timeline duty, NOT padding: the PACED reply keeps streaming
-    // past the needle — the stream tail + the composer re-enable must
-    // land before the dialog keys.
+    // Timeline duty, NOT padding: under a T9_PACE override the reply
+    // STREAMS past the needle — the stream tail + the composer
+    // re-enable must land before the dialog keys (under the default
+    // instant pace it is cheap insurance for the same window).
     settle(3);
 }
 
@@ -444,9 +446,10 @@ fn v19sa_select_action_reset_pair() {
     // Open the Sessions dialog (footer actions carry delete/rename).
     rig.write_both(b"\x18l");
     let ref_open = rig.ref_tui.wait_for_screen(TITLE_TEXT, Duration::from_secs(10));
-    // Timeline duty, NOT padding: the session rows keep filling past
-    // the title needle — the arms below read the full list.
-    settle(2);
+    // The TITLE needle is the ref dialog's own row — the transition
+    // is proven landed; the rust end's open+fill is absorbed by its
+    // capture's 10s poll cap (the serial settle(2) this replaces was
+    // approximation padding).
     export_state(&rig, "v19sa", "open");
     // Arm 1: tab focuses the footer action row; TYPING a filter char
     // resets the action focus back to the list (G-493's set_filter
@@ -459,9 +462,9 @@ fn v19sa_select_action_reset_pair() {
     std::thread::sleep(Duration::from_millis(250));
     export_state_now(&rig, "v19sa", "tabfilter-mid");
     // Timeline duty, NOT padding: the ref's dialog search rides the
-    // PACED gateway — the searching face resolves to the filtered
-    // list only after the paced round-trip (the v21b toast-dwell
-    // lesson: this window IS the state machine).
+    // gateway — the searching face resolves to the filtered list only
+    // after the round-trip (the v21b toast-dwell lesson: this window
+    // IS the state machine).
     settle(2);
     export_state(&rig, "v19sa", "tabfilter");
     rig.write_both(b"\r");
@@ -476,7 +479,8 @@ fn v19sa_select_action_reset_pair() {
     settle(1); // the dialog/route back-out repaint
     rig.write_both(b"\x18l");
     let ref_reopen = rig.ref_tui.wait_for_screen(TITLE_TEXT, Duration::from_secs(10));
-    settle(2); // the reopen's list fill (same window as the first open)
+    // Same as the first open: the needle proves the ref's reopen; the
+    // rust end's reopen+fill rides its capture's poll cap.
     rig.write_both(b"\t");
     settle(1); // the footer-action focus repaint
     export_state(&rig, "v19sa", "tab2");
@@ -508,10 +512,12 @@ fn v19rn_rename_success_pair() {
     // rename prompt (prefilled with the current title).
     rig.write_both(b"\x18l");
     let ref_open = rig.ref_tui.wait_for_screen(TITLE_TEXT, Duration::from_secs(10));
-    settle(2); // the session-list fill (same window as v19sa's open)
-    rig.write_both(b"\x12"); // ctrl+r
+    // The needle proves the ref dialog's row; the rust end's open+fill
+    // rides its capture's 10s poll cap (the serial settle(2) this
+    // replaces was approximation padding).
     // slow-audit fix A: the rename-dialog legs run CONCURRENTLY (the
     // serial two-line form paid the rust leg on top of the ref's).
+    rig.write_both(b"\x12"); // ctrl+r
     let (rust_rename, ref_rename) =
         wait_both_screens(&rig.rust_tui, &rig.ref_tui, "Rename session", 10, 10);
     settle(1); // the prompt's prefill repaint
@@ -527,15 +533,16 @@ fn v19rn_rename_success_pair() {
     rig.write_both(b"\r");
     std::thread::sleep(Duration::from_millis(250));
     export_state_now(&rig, "v19rn", "enter-now");
-    // Timeline duty, NOT padding: the rename rides the PACED gateway
-    // — the dialog close + the tab-strip retitling land only after
-    // the paced round-trip.
+    // Timeline duty, NOT padding: the rename rides the gateway — the
+    // dialog close + the tab-strip retitling land only after the
+    // round-trip.
     settle(3);
     export_state(&rig, "v19rn", "enter-settled");
     // The re-opened list carries the renamed row.
     rig.write_both(b"\x18l");
     let ref_relist = rig.ref_tui.wait_for_screen("MARK", Duration::from_secs(10));
-    settle(2); // the reopen's list fill
+    // The MARK needle proves the ref's renamed row; the rust end's
+    // relisted dialog rides its capture's poll cap.
     export_state(&rig, "v19rn", "list-after");
     assert!(
         ref_open && ref_rename && rust_rename && ref_relist,
