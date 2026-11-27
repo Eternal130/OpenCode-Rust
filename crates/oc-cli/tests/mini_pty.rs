@@ -70,6 +70,12 @@ async fn start_stub(mode: PromptMode) -> Stub {
     let replies = Arc::new(Mutex::new(Vec::new()));
     let catalog_requests = Arc::new(Mutex::new(Vec::new()));
     let mode_storage = Arc::new(Mutex::new(mode));
+    // The stub's event-id counter — the mirror of the real server's
+    // IdGen seam (`state.ids.new_id("evt")`, oc-server sse.rs:357; ref
+    // `Event.ID.create()` = `"evt_" + ascending()`, schema event.ts:
+    // 9-11): each `/api/event` subscription's `server.connected` boot
+    // frame takes the next `evt_<n>`.
+    let ids = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     let server = Stub {
         port,
@@ -81,7 +87,8 @@ async fn start_stub(mode: PromptMode) -> Stub {
 
     tokio::spawn(async move {
         // Every /api/event connection subscribes to the broadcast and
-        // forwards whatever the script sends.
+        // forwards whatever the script sends — after the real server's
+        // `server.connected` boot frame.
         let sub_tx = events_tx;
         loop {
             let Ok((mut socket, _)) = listener.accept().await else { break };
@@ -91,6 +98,7 @@ async fn start_stub(mode: PromptMode) -> Stub {
             let replies = Arc::clone(&replies);
             let catalog_requests = Arc::clone(&catalog_requests);
             let mode = Arc::clone(&mode_storage);
+            let ids = Arc::clone(&ids);
             tokio::spawn(async move {
                 serve_connection(
                     &mut socket,
@@ -100,6 +108,7 @@ async fn start_stub(mode: PromptMode) -> Stub {
                     &replies,
                     &catalog_requests,
                     &mode,
+                    &ids,
                 )
                 .await;
             });
@@ -139,6 +148,7 @@ async fn serve_connection(
     replies: &Arc<Mutex<Vec<String>>>,
     catalog_requests: &Arc<Mutex<Vec<String>>>,
     mode: &Arc<Mutex<PromptMode>>,
+    ids: &Arc<std::sync::atomic::AtomicUsize>,
 ) {
     let head = read_request(socket).await;
     let request = head
@@ -154,9 +164,29 @@ async fn serve_connection(
 
     // -- route -------------------------------------------------------------
     if method == "GET" && path_only == "/api/event" {
+        // [slowG] The real server's subscription handshake: the ref
+        // prepends ONE synthesized frame to every live subscription
+        // (`Stream.make(EventFeed.frame(connected)).concat(live)`,
+        // packages/server/src/handlers/event.ts:18-20 — `connected` is
+        // `{ id: Event.ID.create(), type: "server.connected", data: {} }`,
+        // :13-17) and the port mirrors it byte-for-byte
+        // (`connected_frame`, oc-server sse.rs:356-359, chained first
+        // in `event_response`, sse.rs:463-483). Headers, then the boot
+        // frame (id off the `evt_<n>` IdGen seam), then the broadcast
+        // tail the scripts drive.
         let response = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n";
         let _ = socket.write_all(response.as_bytes()).await;
         output.lock().expect("lock").extend_from_slice(response.as_bytes());
+        let connected = format!(
+            "data: {}\n\n",
+            serde_json::json!({
+                "id": format!("evt_{}", ids.fetch_add(1, std::sync::atomic::Ordering::SeqCst)),
+                "type": "server.connected",
+                "data": {},
+            })
+        );
+        let _ = socket.write_all(connected.as_bytes()).await;
+        output.lock().expect("lock").extend_from_slice(connected.as_bytes());
         let mut subscription = sub_tx.subscribe();
         loop {
             let body = match subscription.recv().await {

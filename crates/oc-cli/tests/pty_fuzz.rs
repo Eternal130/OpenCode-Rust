@@ -92,18 +92,33 @@ struct Stub {
 /// history list, session create, empty transcripts, and a scripted
 /// text-delta turn per prompt POST. Everything else answers `{}`.
 async fn start_stub() -> Stub {
+    stub_trace_init(); // [slowG-evidence] TEMPORARY
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind stub");
     let port = listener.local_addr().expect("addr").port();
     let (events_tx, _) = tokio::sync::broadcast::channel::<String>(64);
     let shutdown = Arc::new(AtomicBool::new(false));
     let prompts = Arc::new(AtomicUsize::new(0));
     let created = Arc::new(AtomicUsize::new(0));
+    // The event-id counter — the stub's mirror of the real server's
+    // IdGen seam (`state.ids.new_id("evt")`, oc-server sse.rs:357; the
+    // ref's `Event.ID.create()` = `"evt_" + ascending()`,
+    // packages/schema/src/event.ts:9-11): every frame this stub
+    // publishes — the `server.connected` boot frame AND each scripted
+    // turn event — takes the next `evt_<n>`. Unique per event, exactly
+    // like the real wire: the store's F2 replay-dedup
+    // (oc-tui store.rs:14446-14463) drops exact id re-deliveries
+    // before any reducer runs, so a scripted turn whose events share
+    // one id would land only its first event and silently drop the
+    // rest (no reply text, no `execution.succeeded` → the session
+    // stays busy and the prompt inbox never drains).
+    let ids = Arc::new(AtomicUsize::new(0));
 
     {
         let events_tx = events_tx;
         let shutdown = Arc::clone(&shutdown);
         let prompts = Arc::clone(&prompts);
         let created = Arc::clone(&created);
+        let ids = Arc::clone(&ids);
         tokio::spawn(async move {
             loop {
                 if shutdown.load(Ordering::SeqCst) {
@@ -113,8 +128,9 @@ async fn start_stub() -> Stub {
                 let events_tx = events_tx.clone();
                 let prompts = Arc::clone(&prompts);
                 let created = Arc::clone(&created);
+                let ids = Arc::clone(&ids);
                 tokio::spawn(async move {
-                    serve_connection(&mut socket, events_tx, &prompts, &created).await;
+                    serve_connection(&mut socket, events_tx, &prompts, &created, &ids).await;
                 });
             }
         });
@@ -158,6 +174,7 @@ async fn serve_connection(
     events_tx: tokio::sync::broadcast::Sender<String>,
     prompts: &AtomicUsize,
     created: &AtomicUsize,
+    ids: &AtomicUsize,
 ) {
     let head = read_request(socket).await;
     let mut parts = head.lines().next().unwrap_or_default().split_whitespace();
@@ -165,11 +182,46 @@ async fn serve_connection(
     let path = parts.next().unwrap_or_default().to_owned();
     let path_only = path.split('?').next().unwrap_or_default().to_owned();
 
-    // SSE: headers then park, forwarding whatever the script emits.
+    // SSE: the real server's subscription handshake. The ref prepends
+    // ONE synthesized frame to every live subscription
+    // (`Stream.make(EventFeed.frame(connected)).concat(live)`,
+    // packages/server/src/handlers/event.ts:18-20 — `connected` is
+    // `{ id: Event.ID.create(), type: "server.connected", data: {} }`,
+    // :13-17) and the port mirrors it byte-for-byte
+    // (`connected_frame`, oc-server sse.rs:356-359, chained first in
+    // `event_response`, sse.rs:463-483). The handshake matters: the
+    // port client's G-300 first-frame marker check (data.rs:1193-1213,
+    // the port of connection.ts:106-107) drops any stream whose first
+    // frame is not `server.connected`, and the ref client's
+    // `server.connected` handler drives `input.connected({ reconnect })`
+    // (connection.ts:14-20). A stub that parks on the broadcast without
+    // the boot frame leaves the app in a connect-window reconnect loop
+    // — permanently reconnecting, never connected: no transcript or
+    // reply surface, prompts never drain. So: headers, then the
+    // connected frame (id from the same `evt_<n>` IdGen seam the turn
+    // events ride), then the broadcast tail.
     if method == "GET" && path_only == "/api/event" {
+        stub_trace(&format!("SSE SUBSCRIBE (boot_frame_enabled={})", std::env::var("OC_SLOWG_NO_BOOT_FRAME").is_err())); // [slowG-evidence] TEMPORARY
         let response = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n";
         if socket.write_all(response.as_bytes()).await.is_err() {
             return;
+        }
+        // [slowG-evidence] TEMPORARY A/B gate — stripped before the
+        // final commit: with OC_SLOWG_NO_BOOT_FRAME set, suppress the
+        // connected frame to reproduce the PRE-fix stub (the
+        // never-connected baseline) from the same binary.
+        if std::env::var("OC_SLOWG_NO_BOOT_FRAME").is_err() {
+            let connected = format!(
+                "data: {}\n\n",
+                serde_json::json!({
+                    "id": next_event_id(ids),
+                    "type": "server.connected",
+                    "data": {},
+                })
+            );
+            if socket.write_all(connected.as_bytes()).await.is_err() {
+                return;
+            }
         }
         let mut subscription = events_tx.subscribe();
         loop {
@@ -239,6 +291,7 @@ async fn serve_connection(
     }
     if method == "POST" && path_only.ends_with("/prompt") {
         let n = prompts.fetch_add(1, Ordering::SeqCst);
+        stub_trace(&format!("PROMPT #{n} POST {path_only}")); // [slowG-evidence] TEMPORARY
         let session_id =
             path_only.trim_start_matches("/api/session/").trim_end_matches("/prompt").to_owned();
         respond_json(
@@ -253,7 +306,7 @@ async fn serve_connection(
             ),
         )
         .await;
-        emit_turn_script(&events_tx, &session_id, n);
+        emit_turn_script(&events_tx, &session_id, n, ids);
         return;
     }
     if method == "POST" && path_only.ends_with("/reply") {
@@ -263,32 +316,97 @@ async fn serve_connection(
     respond_json(socket, "{}").await;
 }
 
-/// The scripted turn a prompt triggers (the `mini_pty.rs`
-/// `PlainReply` script, per-prompt distinct text so transcripts grow
-/// visibly).
-fn emit_turn_script(tx: &tokio::sync::broadcast::Sender<String>, session_id: &str, n: usize) {
+/// The scripted turn a prompt triggers (the `mini_pty.rs` `PlainReply`
+/// script's REAL-WIRE shape, per-prompt distinct text so transcripts
+/// grow visibly). [slowG] Two fidelity corrections the connected state
+/// exposed (the pre-connect stream never reached the store, so the
+/// legacy normalized shape was never caught):
+/// * every event takes a FRESH id off the stub's `evt_<n>` counter —
+///   the real server assigns a unique ascending id to each published
+///   event (`Event.ID.create()` / `state.ids.new_id("evt")`), and the
+///   port store's F2 replay-dedup (store.rs:14446-14463) drops exact
+///   id re-deliveries before any reducer runs, so per-turn shared ids
+///   would drop every event after the first;
+/// * `session.text.*` carries `assistantMessageID` + `ordinal` with NO
+///   partID — the ref schema's exact shape (packages/schema/src/
+///   session-event.ts:393-417, `Base` = `{sessionID}` :38-40) — and
+///   the assistant message id is its OWN id, never the user echo's.
+///   The port store's text reducers dispatch on `assistantMessageID`
+///   (store.rs:16244-16246 `session_and_assistant`) and only fold
+///   into `Message::Assistant` rows (store.rs:16368-16374), so the
+///   legacy `messageID`/`partID` stub shape silently dropped every
+///   scripted reply.
+fn emit_turn_script(
+    tx: &tokio::sync::broadcast::Sender<String>,
+    session_id: &str,
+    n: usize,
+    ids: &AtomicUsize,
+) {
     let event = |kind: &str, data: serde_json::Value| {
-        let _ = tx.send(
-            serde_json::json!({ "type": kind, "data": data, "created": 1, "id": format!("evt_{n}") })
+        // [slowG-evidence] TEMPORARY — the receiver count at emit time.
+        if let Ok(count) = tx.send(
+            serde_json::json!({ "type": kind, "data": data, "created": 1, "id": next_event_id(ids) })
                 .to_string(),
-        );
+        ) {
+            stub_trace(&format!("EVENT {kind} -> {count} receiver(s)"));
+        }
     };
     let session = serde_json::json!({ "sessionID": session_id });
+    let assistant = format!("msg_asst_{n}");
+    let text = format!("Fuzz reply #{n}: the harness says hello.");
     event("session.execution.started", session.clone());
     event(
         "session.text.started",
-        serde_json::json!({ "sessionID": session_id, "messageID": format!("msg_{n}"), "partID": format!("prt_{n}") }),
+        serde_json::json!({ "sessionID": session_id, "assistantMessageID": assistant, "ordinal": 0 }),
     );
     event(
         "session.text.delta",
-        serde_json::json!({ "sessionID": session_id, "messageID": format!("msg_{n}"), "partID": format!("prt_{n}"),
-                             "delta": format!("Fuzz reply #{n}: the harness says hello.") }),
+        serde_json::json!({ "sessionID": session_id, "assistantMessageID": assistant,
+                            "ordinal": 0, "delta": text }),
     );
     event(
         "session.text.ended",
-        serde_json::json!({ "sessionID": session_id, "messageID": format!("msg_{n}"), "partID": format!("prt_{n}") }),
+        serde_json::json!({ "sessionID": session_id, "assistantMessageID": assistant,
+                            "ordinal": 0, "text": text }),
     );
     event("session.execution.succeeded", session);
+}
+
+/// The next wire id for a stub-published frame (`evt_<n>`, ascending —
+/// the real server's IdGen shape, oc-server sse.rs:357 /
+/// ref schema event.ts:9-11).
+fn next_event_id(ids: &AtomicUsize) -> String {
+    format!("evt_{}", ids.fetch_add(1, Ordering::SeqCst))
+}
+
+// [slowG-evidence] TEMPORARY stub trace — stripped before the final
+// commit: every SSE subscription + every broadcast send with its live
+// receiver count (0 receivers = events emitted while the app was
+// between subscriptions).
+static STUB_TRACE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static STUB_T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+fn stub_trace(line: &str) {
+    if let Some(path) = STUB_TRACE.get() {
+        let t = STUB_T0.get().map_or(0, |t0| t0.elapsed().as_millis());
+        use std::fmt::Write as _;
+        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path);
+        if let Ok(ref mut file) = file {
+            let _ = writeln!(file, "t+{t:>6}ms {line}");
+        }
+    }
+}
+
+fn stub_trace_init() {
+    let _ = STUB_T0.set(Instant::now());
+    if let Ok(path) = std::env::var("OC_SLOWG_STUB_LOG") {
+        let _ = STUB_TRACE.set(path);
+        stub_trace(&format!(
+            "stub up; boot_frame_enabled={} (OC_SLOWG_NO_BOOT_FRAME present: {})",
+            std::env::var("OC_SLOWG_NO_BOOT_FRAME").is_err(),
+            std::env::var("OC_SLOWG_NO_BOOT_FRAME").is_ok()
+        ));
+    }
 }
 
 /// Read one request (head + content-length body) into a string.
@@ -577,6 +695,10 @@ struct FuzzPty {
     /// The exit code once OUR waitpid (the job-control poll) reaped
     /// the child — std's `try_wait` then ECHILDs, so the poll caches it.
     reaped: Option<i32>,
+    /// [slowG-evidence] TEMPORARY — the sandbox root (the app's
+    /// stderr redirect target `<sandbox>/.local/state/tui.log` lives
+    /// there); stripped before the final commit.
+    sandbox: std::path::PathBuf,
 }
 
 impl FuzzPty {
@@ -699,7 +821,7 @@ impl FuzzPty {
                 }
             });
         }
-        FuzzPty { child, master, output, vt: Vt::new(), fed: 0, reaped: None }
+        FuzzPty { child, master, output, vt: Vt::new(), fed: 0, reaped: None, sandbox }
     }
 
     fn capture(&self) -> Vec<u8> {
@@ -1041,6 +1163,16 @@ async fn fuzz_one(seed: u64, keys: usize) -> Result<(), String> {
     let mut scanned: usize = 0; // panic/rgb scan offset into the capture
     let mut corruption_checks = 0usize;
     let mut recover_probes = 0usize;
+    // [slowG-evidence] TEMPORARY instrumentation — stripped before the
+    // final commit: how many post-key screens carried the
+    // reconnecting overlay ("Connection lost"), at which key the
+    // first scripted reply text ("Fuzz reply") rendered, and a screen
+    // dump every 20 keys for the before/after state comparison.
+    let evidence_path = std::env::var("OC_SLOWG_EVIDENCE").unwrap_or_default();
+    let mut ev_overlay_polls = 0usize;
+    let mut ev_first_reply: Option<usize> = None;
+    let mut ev_replies_seen = 0usize;
+    let mut ev_dumps: Vec<String> = Vec::new();
 
     let mut index = 0usize;
     while index < actions.len() {
@@ -1154,6 +1286,27 @@ async fn fuzz_one(seed: u64, keys: usize) -> Result<(), String> {
         scanned = capture.len();
 
         let screen_text = pty.vt.screen_text();
+
+        // [slowG-evidence] TEMPORARY — stripped before the final commit.
+        if !evidence_path.is_empty() {
+            if screen_text.contains("Connection lost") {
+                ev_overlay_polls += 1;
+            }
+            if ev_first_reply.is_none() && screen_text.contains("Fuzz reply") {
+                ev_first_reply = Some(index + 1);
+            }
+            if screen_text.contains("Fuzz reply") {
+                ev_replies_seen += 1;
+            }
+            if (index + 1) % 20 == 0 {
+                let rows = pty.vt.text_rows();
+                let mut dump = format!("\n===== after key {}/{} =====\n", index + 1, actions.len());
+                for (i, row) in rows.iter().enumerate() {
+                    dump.push_str(&format!("{i:02}|{row:<80}|\n"));
+                }
+                ev_dumps.push(dump);
+            }
+        }
 
         // (c) non-void screen after boot settles.
         if index >= BOOT_SETTLE_KEYS {
@@ -1272,8 +1425,52 @@ async fn fuzz_one(seed: u64, keys: usize) -> Result<(), String> {
         stub.shutdown.store(true, Ordering::SeqCst);
         return Err(format!("seed {seed}: EXIT failure: panic during exit — dump: {dump}"));
     }
+    // [slowG-evidence] TEMPORARY — stripped before the final commit.
+    let ev_capture = if evidence_path.is_empty() {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&pty.capture()).into_owned()
+    };
+    // The app redirects its stderr to
+    // <sandbox>/.local/state/opencode-rust/tui.log at boot (app.rs
+    // stderr_redirect) — the OC_TUI_DEBUG ingest trace lives THERE,
+    // not in the pty stream.
+    let ev_app_log = std::fs::read_to_string(
+        pty.sandbox.join(".local/state/opencode-rust/tui.log"),
+    )
+    .unwrap_or_default();
     pty.kill();
     stub.shutdown.store(true, Ordering::SeqCst);
+    if !evidence_path.is_empty() {
+        // Count the app's own OC_TUI_DEBUG ingest trace by family.
+        let haystack = ev_capture.as_bytes();
+        let count = |needle: &str| -> usize {
+            haystack.windows(needle.len()).filter(|w| *w == needle.as_bytes()).count()
+        };
+        let log_count = |needle: &str| -> usize {
+            ev_app_log.match_indices(needle).count()
+        };
+        let connected_count = log_count("[tui] ingest: Connected");
+        let reconnecting_count = log_count("ingest: Connection(Reconnecting");
+        let resync_count = log_count("ingest: Resync");
+        let event_count = log_count("ingest: Event");
+        let _ = std::fs::write(
+            &evidence_path,
+            format!(
+                "[slowG-evidence] seed {seed}: {keys} keys — reconnecting-overlay on \
+                 {ev_overlay_polls} post-key screens, first scripted reply (\"Fuzz reply\") \
+                 rendered at key {ev_first_reply:?} (visible on {ev_replies_seen} screens), \
+                 {} prompts posted\n\
+                 app tui.log ingest counts (last child): Connected={connected_count} \
+                 Reconnecting={reconnecting_count} Resync={resync_count} Event={event_count}; \
+                 capture needles: panics={} rgb={}\n{dumps}",
+                stub.prompts.load(Ordering::SeqCst),
+                count("panicked"),
+                count("rgb:"),
+                dumps = ev_dumps.join("\n")
+            ),
+        );
+    }
     eprintln!(
         "[pty_fuzz] seed {seed}: {keys} keys OK — {corruption_checks} corruption checks, \
          {recover_probes} recover probes, {respawns} respawns, {} prompts",
