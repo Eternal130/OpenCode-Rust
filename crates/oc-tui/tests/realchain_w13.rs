@@ -67,94 +67,27 @@ fn wait_both(
     ref_from: usize,
     ref_secs: u64,
 ) -> (bool, bool) {
-    // TEMPORARY slowF instrumentation (per-wait evidence table).
-    let needle_text = String::from_utf8_lossy(needle).into_owned();
-    let needle_a = needle_text.clone();
-    let rust_started = Instant::now();
-    let ref_started = Instant::now();
     std::thread::scope(|scope| {
-        let rust_leg = scope.spawn(move || {
-            let ok = rust_tui.wait_for(needle, rust_from, Duration::from_secs(rust_secs));
-            slowf_note(&format!(
-                "wait_both RUST needle={needle_text:?} window={rust_secs}s took={:.3}s ok={ok}",
-                rust_started.elapsed().as_secs_f64()
-            ));
-            ok
-        });
-        let ref_leg = scope.spawn(move || {
-            let ok = ref_tui.wait_for(needle, ref_from, Duration::from_secs(ref_secs));
-            slowf_note(&format!(
-                "wait_both REF needle={needle_a:?} window={ref_secs}s took={:.3}s ok={ok}",
-                ref_started.elapsed().as_secs_f64()
-            ));
-            ok
-        });
+        let rust_leg = scope
+            .spawn(move || rust_tui.wait_for(needle, rust_from, Duration::from_secs(rust_secs)));
+        let ref_leg =
+            scope.spawn(move || ref_tui.wait_for(needle, ref_from, Duration::from_secs(ref_secs)));
         (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
     })
 }
 
 fn settle(secs: u64) {
-    if secs > 0 {
-        slowf_note(&format!("settle({secs}s)"));
-    }
     std::thread::sleep(Duration::from_secs(secs));
 }
 
-// ---------------------------------------------------------------------------
-// TEMPORARY slowF lane instrumentation (the per-wait evidence tables for
-// the settle audit; stripped before the final commit). Notes go to stderr
-// AND `.test-logs/slowf-notes.txt` (nextest hides captured output on
-// PASS, the file is the readable copy).
-// ---------------------------------------------------------------------------
-thread_local! {
-    static SLOWF_TAG: std::cell::RefCell<Option<String>> =
-        const { std::cell::RefCell::new(None) };
-    static SLOWF_T0: std::cell::RefCell<Option<Instant>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-fn slowf_arm(tag: &str) {
-    SLOWF_TAG.with(|t| *t.borrow_mut() = Some(tag.to_owned()));
-    SLOWF_T0.with(|t| *t.borrow_mut() = Some(Instant::now()));
-    slowf_note("ARM");
-}
-
-fn slowf_note(what: &str) {
-    let elapsed =
-        SLOWF_T0.with(|t| t.borrow().map_or(0.0, |t0| t0.elapsed().as_secs_f64()));
-    let line = SLOWF_TAG.with(|t| {
-        format!("[slowF {} +{elapsed:.3}s] {what}\n", t.borrow().as_deref().unwrap_or("-"))
-    });
-    eprint!("{line}");
-    let dir = worktree_dir(".test-logs");
-    let _ = std::fs::create_dir_all(&dir);
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("slowf-notes.txt"))
-    {
-        use std::io::Write as _;
-        let _ = file.write_all(line.as_bytes());
-    }
-}
-
 fn wait_screen(tui: &TuiProcess, needle: &str, secs: u64) -> bool {
-    let started = Instant::now();
     let deadline = Instant::now() + Duration::from_secs(secs);
     while Instant::now() < deadline {
         if tui.screen_text().contains(needle) {
-            slowf_note(&format!(
-                "wait_screen({needle:?}) window={secs}s took={:.3}s ok=true",
-                started.elapsed().as_secs_f64()
-            ));
             return true;
         }
         std::thread::sleep(Duration::from_millis(150));
     }
-    slowf_note(&format!(
-        "wait_screen({needle:?}) window={secs}s took={:.3}s ok=false",
-        started.elapsed().as_secs_f64()
-    ));
     false
 }
 
@@ -162,6 +95,9 @@ fn wait_screen(tui: &TuiProcess, needle: &str, secs: u64) -> bool {
 /// CONCURRENTLY — the old form ran the two `wait_screen` calls back to
 /// back (the rust leg's window gated the ref leg's start), doubling
 /// every screen wait's wall-clock. The legs are independent PTYs.
+/// Every converted state re-verified byte-identical (the lane report's
+/// before/after table; the divergent states' spinner-phase rows are
+/// the registered capture-phase families).
 fn wait_screen_both(
     rust_tui: &TuiProcess,
     ref_tui: &TuiProcess,
@@ -434,20 +370,13 @@ impl PermRig {
 }
 
 fn perm_rig(tag: &str) -> PermRig {
-    slowf_arm(&format!("perm-{tag}"));
-    let t = Instant::now();
-    let phase = |what: &str| {
-        slowf_note(&format!("{what} (+{:.3}s)", t.elapsed().as_secs_f64()));
-    };
     let lane = lane_lock();
     let corpus = [corpus_tools_dir(), corpus_tools_ref_dir()];
     let rust_gateway = Gateway::spawn_turn(tag, &corpus, None);
     let ref_gateway = Gateway::spawn_turn(tag, &corpus, None);
-    phase("gateways_up");
     let mut rust = sandbox(tag, rust_gateway.port);
     let mut refbox = sandbox(&format!("{tag}ref"), ref_gateway.port);
     let shim_dir = stage_shims(&rust);
-    phase("shims_staged");
     rust.shim_dir = Some(shim_dir);
     refbox.shim_dir = Some(rust.root.join("shimstage"));
     rust.write_config(&[], "replay/claude-opus-4-7");
@@ -457,32 +386,23 @@ fn perm_rig(tag: &str) -> PermRig {
     rust.ask_tools(false);
     refbox.ask_tools(true);
     let stage = ref_stage(&refbox);
-    phase("ref_staged");
     ref_service_stop(&refbox, &stage);
     std::fs::write(rust.project.join("README.md"), README_BEFORE).expect("rust README");
     std::fs::write(refbox.project.join("README.md"), README_BEFORE).expect("ref README");
     let server = service_start(&rust);
-    phase("rust_daemon_up");
     let _ = server.url;
     let rust_tui = TuiProcess::spawn(&rust, COLS, ROWS);
-    phase("rust_tui_spawned");
     let ref_tui = ref_tui_spawn(&refbox, &stage, COLS, ROWS);
-    phase("ref_tui_spawned");
     PermRig { _lane: lane, rust_gateway, ref_gateway, rust, refbox, stage, rust_tui, ref_tui }
 }
 
 impl Drop for PermRig {
     fn drop(&mut self) {
         let _ = (&self.rust_gateway, &self.ref_gateway);
-        slowf_note("PermRig drop: rust_tui shutdown");
         self.rust_tui.shutdown(Duration::from_secs(10));
-        slowf_note("PermRig drop: ref_tui shutdown");
         self.ref_tui.shutdown(Duration::from_secs(10));
-        slowf_note("PermRig drop: ref_service_stop");
         ref_service_stop(&self.refbox, &self.stage);
-        slowf_note("PermRig drop: service_stop");
         service_stop(&self.rust);
-        slowf_note("PermRig drop: done");
     }
 }
 
@@ -531,7 +451,8 @@ fn w13_perm_once_pair() {
     rig.write_both(b"\r");
     // slowF: the tool-output and confirm waits run CONCURRENTLY on both
     // ends (they were serial two-liners before).
-    let (rust_out, ref_out) = wait_screen_both(&rig.rust_tui, &rig.ref_tui, "test result: ok", 30, 45);
+    let (rust_out, ref_out) =
+        wait_screen_both(&rig.rust_tui, &rig.ref_tui, "test result: ok", 30, 45);
     // Second ask: the edit turn.
     let (rust_ask2, ref_ask2) = wait_dialog(&rig, 40);
     assert!(
@@ -540,7 +461,8 @@ fn w13_perm_once_pair() {
          rust={rust_ask2} ref={ref_ask2}"
     );
     rig.write_both(b"\r");
-    let (rust_done, ref_done) = wait_screen_both(&rig.rust_tui, &rig.ref_tui, CONFIRM_NEEDLE, 40, 60);
+    let (rust_done, ref_done) =
+        wait_screen_both(&rig.rust_tui, &rig.ref_tui, CONFIRM_NEEDLE, 40, 60);
     // slowF: settle(4) -> settle(1) — the CONFIRM needle is the turn's
     // last content; 1 s is the paint floor for the trailing meta rows
     // (the slowC post-turn precedent).
@@ -576,13 +498,15 @@ fn w13_perm_always_pair() {
     // left/h + right/l (not tab), so drive the shift with right-arrow —
     // both engines move once → always.
     rig.write_both(b"\x1b[C\r");
-    let (rust_out, ref_out) = wait_screen_both(&rig.rust_tui, &rig.ref_tui, "test result: ok", 30, 45);
+    let (rust_out, ref_out) =
+        wait_screen_both(&rig.rust_tui, &rig.ref_tui, "test result: ok", 30, 45);
     assert!(rust_out && ref_out, "PERM-always RED: turn-0 output rust={rust_out} ref={ref_out}");
     // The edit ask is a DIFFERENT action — always again.
     let (rust_ask2, ref_ask2) = wait_dialog(&rig, 40);
     assert!(rust_ask2 && ref_ask2, "PERM-always RED: edit ask rust={rust_ask2} ref={ref_ask2}");
     rig.write_both(b"\x1b[C\r");
-    let (rust_done, ref_done) = wait_screen_both(&rig.rust_tui, &rig.ref_tui, CONFIRM_NEEDLE, 40, 60);
+    let (rust_done, ref_done) =
+        wait_screen_both(&rig.rust_tui, &rig.ref_tui, CONFIRM_NEEDLE, 40, 60);
     // slowF: settle(4) -> settle(1) — the CONFIRM needle is the turn's
     // last content; 1 s is the paint floor (the slowC post-turn
     // precedent).
@@ -646,7 +570,6 @@ fn w13_omo_sections_at_trigger_width_pair() {
     }
     let lane = lane_lock();
     let gateway = Gateway::spawn_paced("w13-omo", None, &default_pace());
-    slowf_arm("w13-omo");
     let rust = sandbox("w13-omo", gateway.port);
     let refbox = sandbox("w13-omoref", gateway.port);
     let rust_specs = stage_plugins(&rust, false);
@@ -680,18 +603,10 @@ fn w13_omo_sections_at_trigger_width_pair() {
         .expect("write omo plugin config");
     }
     let stage = ref_stage(&refbox);
-    let t = Instant::now();
-    let phase = |what: &str| {
-        slowf_note(&format!("omo {what} (+{:.3}s)", t.elapsed().as_secs_f64()));
-    };
-    phase("ref_staged");
     ref_service_stop(&refbox, &stage);
     let server = service_start(&rust);
-    phase("rust_daemon_up");
     let mut rust_tui = TuiProcess::spawn(&rust, 96, ROWS);
-    phase("rust_tui_spawned");
     let mut ref_tui = ref_tui_spawn(&refbox, &stage, 96, ROWS);
-    phase("ref_tui_spawned");
     let roots =
         [refbox.root.to_string_lossy().into_owned(), rust.root.to_string_lossy().into_owned()];
     let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
@@ -712,33 +627,25 @@ fn w13_omo_sections_at_trigger_width_pair() {
     let count_pills = |screen: &str| -> u64 {
         pill_needles.iter().map(|needle| screen.matches(needle).count() as u64).sum()
     };
-    // Plugin load is async — settle past the wordmark.
-    // slowF: the settle(8) is now NEEDLE-GATED on the plugin-loaded
-    // face — the composer's agent row flips from the base "Build ·"
-    // to the omo plugin's "Orchestrator ·" agent (the plugin's
-    // agent registration reaching the store; both ends carry the
-    // row, the w13-omo-home export is EXACT). Bounded 15 s.
-    slowf_note("omo: waiting Orchestrator (plugin-loaded face)");
+    // Plugin load is async — the OLD gate was a blind 8 s settle past
+    // the wordmark. slowF: NEEDLE-GATED on the plugin-loaded face —
+    // the composer's agent row flips from the base "Build ·" to the
+    // omo plugin's "Orchestrator ·" agent (the plugin's agent
+    // registration reaching the store; both ends carry the row, the
+    // w13-omo-home export is EXACT). Bounded 15 s.
     {
-        let t_orch = Instant::now();
         let deadline = Instant::now() + Duration::from_secs(15);
         let face = |t: &TuiProcess| t.screen_text().contains("Orchestrator ·");
         while !(face(&rust_tui) && face(&ref_tui)) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(150));
         }
-        slowf_note(&format!(
-            "omo Orchestrator poll took={:.3}s",
-            t_orch.elapsed().as_secs_f64()
-        ));
     }
     // slowF: a 2 s beat after the plugin face — the prompt below must
     // clear the ref's first-submit boot-race window (the pair lane's
     // forensics; wordmark+2+2 covers the pair lane's settle(3) form).
     settle(2);
-    phase("settle8_A_done");
     let home_ref = normalize(&ref_tui.screen_text());
     let home_rust = normalize(&rust_tui.screen_text());
-    phase("home_grids_read");
     dump_grid("w13-omo-home-ref", &home_ref);
     dump_grid("w13-omo-home-rust", &home_rust);
     export_grid_diff("w13-omo", "home", &home_ref, &home_rust);
@@ -763,12 +670,9 @@ fn w13_omo_sections_at_trigger_width_pair() {
     // 8 s beat carried no live duty on this face — the lane's
     // evidence table). 1 s keeps the two exports as distinct
     // moments past the render timer.
-    slowf_note("omo: settle(1) B (hydration dwell, past-dead in baseline)");
     settle(1);
-    phase("settle8_B_done");
     let hydrated_ref = normalize(&ref_tui.screen_text());
     let hydrated_rust = normalize(&rust_tui.screen_text());
-    phase("hydrated_grids_read");
     dump_grid("w13-omo-home-hydrated-ref", &hydrated_ref);
     dump_grid("w13-omo-home-hydrated-rust", &hydrated_rust);
     export_grid_diff("w13-omo", "home-hydrated", &hydrated_ref, &hydrated_rust);
@@ -782,7 +686,6 @@ fn w13_omo_sections_at_trigger_width_pair() {
     let ref_from = ref_tui.raw_len();
     rust_tui.write(b"hello\r");
     ref_tui.write(b"hello\r");
-    phase("prompt_sent");
     // slowF: the two serial reply waits run CONCURRENTLY (the
     // wait_both form — same windows, same needles).
     let (rust_replied, ref_replied) =
@@ -790,14 +693,11 @@ fn w13_omo_sections_at_trigger_width_pair() {
     // slowF: settle(4) -> settle(1) — the reply needle gates the
     // state; 1 s is the paint floor for the tab/meta rows.
     settle(1);
-    phase("settle4_done");
     let session_ref = normalize(&ref_tui.screen_text());
     let session_rust = normalize(&rust_tui.screen_text());
-    phase("session_grids_read");
     dump_grid("w13-omo-session-ref", &session_ref);
     dump_grid("w13-omo-session-rust", &session_rust);
     let stats = gateway.stats();
-    slowf_note("omo: teardown");
     rust_tui.shutdown(Duration::from_secs(10));
     ref_tui.shutdown(Duration::from_secs(10));
     ref_service_stop(&refbox, &stage);
@@ -805,7 +705,6 @@ fn w13_omo_sections_at_trigger_width_pair() {
     let _ = &server.url;
     drop(gateway);
     drop(lane);
-    phase("torn_down");
     assert!(ref_replied, "OMO RED (ref-side rig sanity): the ref reply never rendered; {stats}");
     export_grid_diff("w13-omo", "session", &session_ref, &session_rust);
     export_survey(
@@ -846,11 +745,6 @@ fn w13_seed(suffix: &str) -> PathBuf {
 /// reply renders (or errors — exported either way), settled grids
 /// export.
 fn g_scenario(suffix: &str, prompt: &str) {
-    slowf_arm(&format!("w13-g-{suffix}"));
-    let t = Instant::now();
-    let phase = |what: &str| {
-        slowf_note(&format!("{what} (+{:.3}s)", t.elapsed().as_secs_f64()));
-    };
     let lane = lane_lock();
     let tag = format!("w13-g-{suffix}");
     let gateway = Gateway::spawn(&tag, None);
@@ -859,21 +753,16 @@ fn g_scenario(suffix: &str, prompt: &str) {
     rust.write_config(&[], "replay/claude-opus-4-7");
     refbox.write_ref_config(&[], "replay/claude-opus-4-7");
     let stage = ref_stage(&refbox);
-    phase("rig_up");
     ref_service_stop(&refbox, &stage);
     let _server = service_start(&rust);
-    phase("rust_daemon_up");
     let mut rust_tui = TuiProcess::spawn(&rust, COLS, ROWS);
-    phase("rust_tui_spawned");
     let mut ref_tui = ref_tui_spawn(&refbox, &stage, COLS, ROWS);
-    phase("ref_tui_spawned");
     let roots =
         [refbox.root.to_string_lossy().into_owned(), rust.root.to_string_lossy().into_owned()];
     let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
     let normalize = |grid: &str| normalize_grid(grid, &refs);
 
     let (rust_booted, ref_booted) = wait_both(&rust_tui, &ref_tui, WORDMARK, 0, 30, 0, 60);
-    phase("wordmark_done");
     assert!(
         rust_booted && ref_booted,
         "G-{suffix} precondition RED: boot {rust_booted}/{ref_booted}"
@@ -882,10 +771,8 @@ fn g_scenario(suffix: &str, prompt: &str) {
     // ref's first-submit boot race — the pair lane's forensics; the
     // prompt must not be typed at wordmark+0).
     settle(2);
-    phase("settle2_done");
     rust_tui.write(format!("{prompt}\r").as_bytes());
     ref_tui.write(format!("{prompt}\r").as_bytes());
-    phase("prompt_sent");
     // The reply's shape is payload-specific (the empty seed renders
     // no text) — the OLD gate settled on TIME (a blind 12 s beat).
     // slowF: needle-ized — the assistant META ROW ("Build ·
@@ -899,21 +786,17 @@ fn g_scenario(suffix: &str, prompt: &str) {
     let _ = wait_screen_both(&rust_tui, &ref_tui, "Build · claude-opus-4-7 ·", 20, 30);
     let _ = wait_both(&rust_tui, &ref_tui, b"Sandbox Replay Session", 0, 20, 0, 30);
     settle(1);
-    phase("settle12_done");
     let ref_grid = normalize(&ref_tui.screen_text());
     let rust_grid = normalize(&rust_tui.screen_text());
-    phase("grids_read");
     dump_grid(&format!("w13-g-{suffix}-ref"), &ref_grid);
     dump_grid(&format!("w13-g-{suffix}-rust"), &rust_grid);
     let stats = gateway.stats();
-    slowf_note("g_scenario: teardown");
     rust_tui.shutdown(Duration::from_secs(10));
     ref_tui.shutdown(Duration::from_secs(10));
     ref_service_stop(&refbox, &stage);
     service_stop(&rust);
     drop(gateway);
     drop(lane);
-    phase("torn_down");
     eprintln!("G-{suffix} gateway stats: {stats}");
     export_grid_diff(&format!("w13-g-{suffix}"), "settled", &ref_grid, &rust_grid);
 }
