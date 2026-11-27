@@ -123,6 +123,78 @@ fn settle(secs: u64) {
     std::thread::sleep(Duration::from_secs(secs));
 }
 
+/// 2026-11-27 slow-audit fix A (battery family, the pattern proven in
+/// the v21 waves): wait BOTH ends CONCURRENTLY — the serial two-line
+/// form (rust first, then ref) doubled every wait's wall-clock; the
+/// concurrent legs run in threads and the tuple carries both
+/// verdicts.
+fn wait_both(
+    rust_tui: &TuiProcess,
+    ref_tui: &TuiProcess,
+    needle: &[u8],
+    rust_from: usize,
+    rust_secs: u64,
+    ref_from: usize,
+    ref_secs: u64,
+) -> (bool, bool) {
+    std::thread::scope(|scope| {
+        let rust_leg = scope
+            .spawn(move || rust_tui.wait_for(needle, rust_from, Duration::from_secs(rust_secs)));
+        let ref_leg =
+            scope.spawn(move || ref_tui.wait_for(needle, ref_from, Duration::from_secs(ref_secs)));
+        (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
+    })
+}
+
+/// The screen-needle twin of [`wait_both`] (same slow-audit fix A).
+fn wait_both_screens(
+    rust_tui: &TuiProcess,
+    ref_tui: &TuiProcess,
+    needle: &str,
+    rust_secs: u64,
+    ref_secs: u64,
+) -> (bool, bool) {
+    let poll = |tui: &TuiProcess, secs: u64| {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < deadline {
+            if tui.screen_text().contains(needle) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    };
+    std::thread::scope(|scope| {
+        let rust_leg = scope.spawn(move || poll(rust_tui, rust_secs));
+        let ref_leg = scope.spawn(move || poll(ref_tui, ref_secs));
+        (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
+    })
+}
+
+/// The hello-turn wait cluster (the reply needle on BOTH ends + the
+/// seeded title on ref) in ONE scope — the serial two-line form paid
+/// the rust reply wait on top of the ref's, and the title leg ran
+/// only after both.
+fn wait_hello_turn(
+    rust_tui: &TuiProcess,
+    ref_tui: &TuiProcess,
+    rust_from: usize,
+    ref_from: usize,
+) -> (bool, bool) {
+    std::thread::scope(|scope| {
+        let rust_leg = scope
+            .spawn(move || rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30)));
+        let ref_leg = scope.spawn(move || {
+            let replied = ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
+            // The title lands with (usually before) the reply —
+            // ref-only needle, waited out in the same leg.
+            let _ = ref_tui.wait_for(TITLE_TEXT.as_bytes(), ref_from, Duration::from_secs(30));
+            replied
+        });
+        (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
+    })
+}
+
 fn v17_rig(tag: &str) -> V17Rig {
     let lane = lane_lock();
     let gateway = Gateway::spawn_paced(tag, None, &default_pace());
@@ -149,8 +221,10 @@ impl Drop for V17Rig {
 }
 
 fn boot_both(rig: &mut V17Rig) {
-    let rust_settled = rig.rust_tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
-    let ref_settled = rig.ref_tui.wait_for(WORDMARK, 0, Duration::from_secs(60));
+    // slow-audit fix A: the boot legs run CONCURRENTLY (the serial
+    // two-line form paid the rust boot on top of the ref's slower
+    // one).
+    let (rust_settled, ref_settled) = wait_both(&rig.rust_tui, &rig.ref_tui, WORDMARK, 0, 30, 0, 60);
     assert!(
         rust_settled && ref_settled,
         "VA17 rig RED: boot rust={rust_settled} ref={ref_settled}; rust screen:\n{}\nref \
@@ -158,6 +232,9 @@ fn boot_both(rig: &mut V17Rig) {
         rig.rust_tui.screen_text(),
         rig.ref_tui.screen_text()
     );
+    // Timeline duty, NOT padding: the session-list fetch + composer
+    // focus complete AFTER the wordmark paints — the first
+    // keystrokes must land in the ready app.
     settle(3);
 }
 
@@ -225,18 +302,22 @@ fn v17a_palette_action_and_scroll_pair() {
     // Open the models palette on the UNFILTERED list (many rows — the
     // scroll micro needs a real window).
     rig.write_both(b"\x18m");
-    let rust_open = rig.rust_tui.wait_for_screen("claude-opus-4-7", Duration::from_secs(15));
-    let ref_open = rig.ref_tui.wait_for_screen("claude-opus-4-7", Duration::from_secs(30));
+    // slow-audit fix A: the open legs run CONCURRENTLY.
+    let (rust_open, ref_open) =
+        wait_both_screens(&rig.rust_tui, &rig.ref_tui, "claude-opus-4-7", 15, 30);
+    // Timeline duty, NOT padding: the palette rows keep filling past
+    // the selected row's needle — the End→Home micro below reads the
+    // FULL list tail, so the fill must complete first.
     settle(2);
     // Micro: End jumps to the list tail, Home back to the top — the
     // ref's reveal() special-cases scrollTo(0) when the selection is
     // the first entry (dialog-select.tsx:406-418); the frames ride
     // the export.
     rig.write_both(b"\x1b[F");
-    settle(1);
+    settle(1); // the End selection/scroll repaint
     export_state(&rig, "v17a", "palette-end");
     rig.write_both(b"\x1b[H");
-    settle(1);
+    settle(1); // the Home selection/scroll repaint
     export_state(&rig, "v17a", "palette-home");
     // Candidate 1: tab (focus the footer action on ref / the rust
     // pump's own reading), then return. Ref submit() consults
@@ -244,9 +325,12 @@ fn v17a_palette_action_and_scroll_pair() {
     // (dialog-model.tsx:144-150); the rust Enter submits the selected
     // row. The POST-key frames are the evidence.
     rig.write_both(b"\t");
-    settle(1);
+    settle(1); // the footer-action focus repaint
     export_state(&rig, "v17a", "palette-tab");
     rig.write_both(b"\r");
+    // Timeline duty, NOT padding: the footer action's effect (the
+    // "View all integrations" navigation on ref) is a post-submit
+    // repaint — the settled export must carry the landed action.
     settle(3);
     let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
     let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
@@ -275,13 +359,20 @@ fn v17b_sessions_dialog_faces_pair() {
     let rust_from = rig.rust_tui.raw_len();
     let ref_from = rig.ref_tui.raw_len();
     rig.write_both(b"hello\r");
-    let rust_replied = rig.rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30));
-    let ref_replied = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
-    let _ = rig.ref_tui.wait_for(TITLE_TEXT.as_bytes(), ref_from, Duration::from_secs(30));
+    // slow-audit fix A: the reply/title legs run CONCURRENTLY (the
+    // serial two-line form paid the rust reply wait on top of the
+    // ref's).
+    let (rust_replied, ref_replied) =
+        wait_hello_turn(&rig.rust_tui, &rig.ref_tui, rust_from, ref_from);
+    // Timeline duty, NOT padding: the PACED reply keeps streaming
+    // past the needle — the stream tail + the composer re-enable must
+    // land before the dialog keys.
     settle(3);
     // Open the Sessions dialog.
     rig.write_both(b"\x18l");
     let ref_open = rig.ref_tui.wait_for_screen(TITLE_TEXT, Duration::from_secs(10));
+    // Timeline duty, NOT padding: the session rows keep filling past
+    // the title needle — the tab/enter arms below read the full list.
     settle(2);
     export_state(&rig, "v17b", "sessions");
     // Candidate 1 (sessions face): tab focuses the footer action row
@@ -289,9 +380,12 @@ fn v17b_sessions_dialog_faces_pair() {
     // row pins, the dialog STAYS OPEN; the rust return submits the
     // selected row (navigates / closes).
     rig.write_both(b"\t");
-    settle(1);
+    settle(1); // the footer focus repaint (no stable text needle)
     export_state(&rig, "v17b", "sessions-tab");
     rig.write_both(b"\r");
+    // Timeline duty, NOT padding: the footer action's effect is a
+    // server round-trip on ref (the pin) — the post-enter frame must
+    // carry the landed effect.
     settle(3);
     export_state(&rig, "v17b", "sessions-tabenter");
     // Candidate 5: reopen, ctrl+r on the selected row. Ref opens the
@@ -299,9 +393,15 @@ fn v17b_sessions_dialog_faces_pair() {
     // pin/delete — ctrl+r falls through.
     rig.write_both(b"\x18l");
     let ref_reopen = rig.ref_tui.wait_for_screen(TITLE_TEXT, Duration::from_secs(10));
-    settle(2);
+    settle(2); // the reopen's list fill (same window as the first open)
     rig.write_both(b"\x12"); // ctrl+r
-    settle(2);
+    // The ref's rename-dialog mount is needle-gated (the v19rn
+    // needle "Rename session" — the serial settle(2) this replaces
+    // only approximated it); the rust end's ctrl+r is a fallthrough
+    // (no screen change to wait out).
+    if !rig.ref_tui.wait_for_screen("Rename session", Duration::from_secs(10)) {
+        eprintln!("V17B note: the ref rename dialog did not open within its 10s window");
+    }
     export_state(&rig, "v17b", "sessions-ctrlr");
     // Candidate 7: the searchState faces. Ref's rename dialog (if
     // open) closes on esc first; then clear any filter and type a
@@ -314,14 +414,21 @@ fn v17b_sessions_dialog_faces_pair() {
     rig.write_both(b"zz");
     std::thread::sleep(Duration::from_millis(250));
     export_state_now(&rig, "v17b", "sessions-search-mid");
+    // Timeline duty, NOT padding: the ref's dialog search rides the
+    // PACED gateway — the searching face resolves to no-match only
+    // after the paced round-trip (the v21b toast-dwell lesson: this
+    // window IS the state machine).
     settle(3);
     export_state(&rig, "v17b", "sessions-search-settled");
     // Close everything back to home (ref: filter esc / dialog esc;
-    // a couple of escs cover both layers on both ends).
+    // a couple of escs cover both layers on both ends). These stay
+    // FIXED windows (not needle-gated): the title text is on the
+    // dialog's own rows too, so a positive needle would false-fire
+    // before the escs process.
     rig.write_both(b"\x1b");
-    settle(1);
+    settle(1); // the filter-clear repaint
     rig.write_both(b"\x1b");
-    settle(2);
+    settle(2); // the dialog-close → home repaint (the tabmenu target)
     // TabMenu bookkeeping frame: right-click the session tab (top
     // strip) — the row context menu's first column rides the export.
     let rust_tab = find_on_screen(&rig.rust_tui, TITLE_TEXT);
@@ -334,6 +441,8 @@ fn v17b_sessions_dialog_faces_pair() {
         rig.ref_tui.write(format!("\x1b[<2;{};{}M", fx + 1, fy + 1).as_bytes());
         std::thread::sleep(Duration::from_millis(120));
         rig.ref_tui.write(format!("\x1b[<2;{};{}m", fx + 1, fy + 1).as_bytes());
+        // Timeline duty: the row-context menu's mount (no verified
+        // two-end needle — the menu's rows are the export itself).
         settle(2);
         export_state(&rig, "v17b", "tabmenu");
     } else {
@@ -365,14 +474,18 @@ fn v17c_export_dialog_pair() {
     let rust_from = rig.rust_tui.raw_len();
     let ref_from = rig.ref_tui.raw_len();
     rig.write_both(b"hello\r");
-    let rust_replied = rig.rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30));
-    let ref_replied = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
+    // slow-audit fix A: the reply/title legs run CONCURRENTLY.
+    let (rust_replied, ref_replied) =
+        wait_hello_turn(&rig.rust_tui, &rig.ref_tui, rust_from, ref_from);
+    // Timeline duty, NOT padding: the PACED reply's stream tail +
+    // composer re-enable land here (same window as v17b's).
     settle(3);
     // `<leader>x` opens the export options on both ends (the ref pill
     // box, the rust select rows — both titled "Export session").
     rig.write_both(b"\x18x");
-    let rust_open = rig.rust_tui.wait_for_screen("Export session", Duration::from_secs(10));
-    let ref_open = rig.ref_tui.wait_for_screen("Export session", Duration::from_secs(15));
+    // slow-audit fix A: the open legs run CONCURRENTLY.
+    let (rust_open, ref_open) =
+        wait_both_screens(&rig.rust_tui, &rig.ref_tui, "Export session", 10, 15);
     settle(2);
     export_state(&rig, "v17c", "export-open");
     // Candidate 6: tab — ref cycles the active pill (markdown → json),
@@ -383,7 +496,7 @@ fn v17c_export_dialog_pair() {
     // Return — ref ACTIVATES the focused pill (json → format flips);
     // rust submits the selected row.
     rig.write_both(b"\r");
-    settle(2);
+    settle(2); // the activation effect's repaint window
     export_state(&rig, "v17c", "export-enter");
     drop(rig);
     assert!(
@@ -409,41 +522,54 @@ fn v17d_diff_viewer_faces_pair() {
     // Route into the diff viewer through the command palette (both
     // ends: ctrl+p, filter "diff", return on "Open diff viewer").
     rig.write_both(b"\x10");
+    // Sync barrier (timeline duty): the palette must be listening
+    // before the filter types — "diff" landing in the composer would
+    // break the route.
     settle(1);
     rig.write_both(b"diff");
     settle(1);
     rig.write_both(b"\r");
     // The sandbox project is NOT a git repo — the viewer's empty /
-    // error face is exactly the state candidate 4 wants.
-    settle(4);
+    // error face is exactly the state candidate 4 wants. The route's
+    // completion is NEEDLE-gated on both ends (the settled face's own
+    // copy — verified on both grids), replacing the fixed 4s window;
+    // the trailing 1s is the late-transition buffer.
+    let _ = wait_both_screens(&rig.rust_tui, &rig.ref_tui, "No changes to show", 30, 30);
+    settle(1);
     export_state(&rig, "v17d", "diff-route-empty");
     // DiffHelp (?) — centered on ref (diff-viewer.tsx:1100-1192), the
-    // rust select dialog's own geometry rides the export.
+    // rust select dialog's own geometry rides the export. The overlay
+    // mount is needle-gated on both ends ("Diff shortcuts" is on both
+    // grids).
     rig.write_both(b"?");
-    settle(2);
+    let _ = wait_both_screens(&rig.rust_tui, &rig.ref_tui, "Diff shortcuts", 15, 15);
     export_state(&rig, "v17d", "diff-help");
     rig.write_both(b"\x1b");
     settle(1);
-    // DiffSource (d) — no filter row on ref (:735-767).
+    // DiffSource (d) — no filter row on ref (:735-767). The dialog
+    // mount is needle-gated on both ends (the dialog title).
     rig.write_both(b"d");
-    settle(2);
+    let _ = wait_both_screens(&rig.rust_tui, &rig.ref_tui, "Diff source", 15, 15);
     export_state(&rig, "v17d", "diff-source");
     // Selecting the BASE source surfaces the DiffBase face (title
     // "Base branch", placeholder "Search local and remote branches"
     // on ref; the "No branches" empty view here) — the entries are
-    // All/Committed/Uncommitted/Base, so three downs first.
+    // All/Committed/Uncommitted/Base, so three downs first. The base
+    // dialog's mount is needle-gated on its title.
     rig.write_both(b"\x1b[B\x1b[B\x1b[B");
     settle(1);
     rig.write_both(b"\r");
-    settle(2);
+    let _ = wait_both_screens(&rig.rust_tui, &rig.ref_tui, "Base branch", 15, 15);
     export_state(&rig, "v17d", "diff-base-empty");
-    // Back out to home.
+    // Back out to home: the three escs are event-ordered (the PTY
+    // preserves input order — the state transitions complete before
+    // the next palette key reads them), so the intermediate 1s pads
+    // were pure spacing padding (cut); the trailing settle is the
+    // route-exit paint buffer.
+    rig.write_both(b"\x1b");
+    rig.write_both(b"\x1b");
     rig.write_both(b"\x1b");
     settle(1);
-    rig.write_both(b"\x1b");
-    settle(1);
-    rig.write_both(b"\x1b");
-    settle(2);
     // Seed a real repo on BOTH projects (data state): a commit plus a
     // `dev` branch, so DiffBase carries rows and the search field.
     for project in [&rig.rust.project, &rig.refbox.project] {
@@ -478,19 +604,24 @@ fn v17d_diff_viewer_faces_pair() {
     }
     // Re-enter the viewer over the seeded repo.
     rig.write_both(b"\x10");
+    // Sync barrier (timeline duty, same as the first route): the
+    // palette must be listening before the filter types.
     settle(1);
     rig.write_both(b"diff");
     settle(1);
     rig.write_both(b"\r");
-    settle(4);
+    // Same needle-gated route completion as the first arm (the
+    // clean-seeded repo shows the empty face too).
+    let _ = wait_both_screens(&rig.rust_tui, &rig.ref_tui, "No changes to show", 30, 30);
+    settle(1);
     export_state(&rig, "v17d", "diff-route-git");
     rig.write_both(b"d");
-    settle(2);
+    let _ = wait_both_screens(&rig.rust_tui, &rig.ref_tui, "Diff source", 15, 15);
     export_state(&rig, "v17d", "diff-source-git");
     rig.write_both(b"\x1b[B\x1b[B\x1b[B");
     settle(1);
     rig.write_both(b"\r");
-    settle(2);
+    let _ = wait_both_screens(&rig.rust_tui, &rig.ref_tui, "Base branch", 15, 15);
     export_state(&rig, "v17d", "diff-base-data");
     drop(rig);
 }
@@ -563,18 +694,20 @@ fn v17e_tool_output_dialog_pair() {
     let root_refs: Vec<&str> = roots.iter().map(String::as_str).collect();
     let normalize = |grid: &str| normalize_grid(grid, &root_refs);
 
-    let rust_booted = rust_tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
-    let ref_booted = ref_tui.wait_for(WORDMARK, 0, Duration::from_secs(60));
+    // slow-audit fix A: the boot legs run CONCURRENTLY.
+    let (rust_booted, ref_booted) = wait_both(&rust_tui, &ref_tui, WORDMARK, 0, 30, 0, 60);
     assert!(rust_booted && ref_booted, "V17E rig RED: boot rust={rust_booted} ref={ref_booted}");
     settle(2);
     rust_tui.write(b"hello\r");
     ref_tui.write(b"hello\r");
     // The tool loop settles on both ends (the shell row + the
-    // confirmation needle are the rig's own health).
-    let rust_cmd = rust_tui.wait_for_screen("cargo test", Duration::from_secs(30));
-    let ref_cmd = ref_tui.wait_for_screen("cargo test", Duration::from_secs(60));
-    let rust_done = rust_tui.wait_for_screen(CONFIRM_NEEDLE, Duration::from_secs(40));
-    let ref_done = ref_tui.wait_for_screen(CONFIRM_NEEDLE, Duration::from_secs(90));
+    // confirmation needle are the rig's own health). slow-audit fix
+    // A: each needle pair runs CONCURRENTLY.
+    let (rust_cmd, ref_cmd) = wait_both_screens(&rust_tui, &ref_tui, "cargo test", 30, 60);
+    let (rust_done, ref_done) = wait_both_screens(&rust_tui, &ref_tui, CONFIRM_NEEDLE, 40, 90);
+    // Timeline duty, NOT padding: the turn-scripted loop's stream
+    // tail (the confirmation row's usage half) lands after the
+    // needle — the pre-click grids must carry the finished turn.
     settle(3);
     // CLICK the shell row on each end (each end's own coords — the
     // rows may sit at different lines).
@@ -674,8 +807,8 @@ fn v17f_mention_dedup_pair() {
     rig.write_both(b"@");
     settle(1);
     rig.write_both(b"dup");
-    let rust_listed = rig.rust_tui.wait_for_screen("dup.txt", Duration::from_secs(15));
-    let ref_listed = rig.ref_tui.wait_for_screen("dup.txt", Duration::from_secs(25));
+    // slow-audit fix A: the listing legs run CONCURRENTLY.
+    let (rust_listed, ref_listed) = wait_both_screens(&rig.rust_tui, &rig.ref_tui, "dup.txt", 15, 25);
     settle(1);
     export_state_now(&rig, "v17f", "mention-complete");
     rig.write_both(b"\r");

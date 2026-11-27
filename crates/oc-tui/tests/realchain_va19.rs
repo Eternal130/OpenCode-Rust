@@ -163,6 +163,54 @@ fn settle(secs: u64) {
     std::thread::sleep(Duration::from_secs(secs));
 }
 
+/// 2026-11-27 slow-audit fix A (battery family, the pattern proven in
+/// the v21 waves): wait BOTH ends CONCURRENTLY — the serial two-line
+/// form (rust first, then ref) doubled every wait's wall-clock; the
+/// concurrent legs run in threads and the tuple carries both
+/// verdicts.
+fn wait_both(
+    rust_tui: &TuiProcess,
+    ref_tui: &TuiProcess,
+    needle: &[u8],
+    rust_from: usize,
+    rust_secs: u64,
+    ref_from: usize,
+    ref_secs: u64,
+) -> (bool, bool) {
+    std::thread::scope(|scope| {
+        let rust_leg = scope
+            .spawn(move || rust_tui.wait_for(needle, rust_from, Duration::from_secs(rust_secs)));
+        let ref_leg =
+            scope.spawn(move || ref_tui.wait_for(needle, ref_from, Duration::from_secs(ref_secs)));
+        (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
+    })
+}
+
+/// The screen-needle twin of [`wait_both`] (same slow-audit fix A).
+fn wait_both_screens(
+    rust_tui: &TuiProcess,
+    ref_tui: &TuiProcess,
+    needle: &str,
+    rust_secs: u64,
+    ref_secs: u64,
+) -> (bool, bool) {
+    let poll = |tui: &TuiProcess, secs: u64| {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < deadline {
+            if tui.screen_text().contains(needle) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    };
+    std::thread::scope(|scope| {
+        let rust_leg = scope.spawn(move || poll(rust_tui, rust_secs));
+        let ref_leg = scope.spawn(move || poll(ref_tui, ref_secs));
+        (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
+    })
+}
+
 fn v19_rig(tag: &str) -> V19Rig {
     let lane = lane_lock();
     let gateway = Gateway::spawn_paced(tag, None, &default_pace());
@@ -180,8 +228,10 @@ fn v19_rig(tag: &str) -> V19Rig {
 }
 
 fn boot_both(rig: &mut V19Rig) {
-    let rust_settled = rig.rust_tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
-    let ref_settled = rig.ref_tui.wait_for(WORDMARK, 0, Duration::from_secs(60));
+    // slow-audit fix A: the boot legs run CONCURRENTLY (the serial
+    // two-line form paid the rust boot on top of the ref's slower
+    // one).
+    let (rust_settled, ref_settled) = wait_both(&rig.rust_tui, &rig.ref_tui, WORDMARK, 0, 30, 0, 60);
     assert!(
         rust_settled && ref_settled,
         "VA19 rig RED: boot rust={rust_settled} ref={ref_settled}; rust screen:\n{}\nref \
@@ -189,6 +239,9 @@ fn boot_both(rig: &mut V19Rig) {
         rig.rust_tui.screen_text(),
         rig.ref_tui.screen_text()
     );
+    // Timeline duty, NOT padding: the session-list fetch + composer
+    // focus complete AFTER the wordmark paints — the first
+    // keystrokes must land in the ready app.
     settle(3);
 }
 
@@ -341,14 +394,41 @@ fn hello_turn(rig: &mut V19Rig) {
     let rust_from = rig.rust_tui.raw_len();
     let ref_from = rig.ref_tui.raw_len();
     rig.write_both(b"hello\r");
-    let rust_replied = rig.rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30));
-    let ref_replied = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
-    let _ = rig.ref_tui.wait_for(TITLE_TEXT.as_bytes(), ref_from, Duration::from_secs(30));
+    // slow-audit fix A: the reply/title legs run CONCURRENTLY (the
+    // serial two-line form paid the rust reply wait on top of the
+    // ref's, and the title leg ran only after both).
+    let (rust_replied, ref_replied) =
+        wait_hello_turn(&rig.rust_tui, &rig.ref_tui, rust_from, ref_from);
     assert!(
         rust_replied && ref_replied,
         "VA19 rig RED: hello turn rust={rust_replied} ref={ref_replied}"
     );
+    // Timeline duty, NOT padding: the PACED reply keeps streaming
+    // past the needle — the stream tail + the composer re-enable must
+    // land before the dialog keys.
     settle(3);
+}
+
+/// The hello-turn wait cluster (reply needle on BOTH ends + the
+/// seeded title on ref) in ONE scope.
+fn wait_hello_turn(
+    rust_tui: &TuiProcess,
+    ref_tui: &TuiProcess,
+    rust_from: usize,
+    ref_from: usize,
+) -> (bool, bool) {
+    std::thread::scope(|scope| {
+        let rust_leg = scope
+            .spawn(move || rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30)));
+        let ref_leg = scope.spawn(move || {
+            let replied = ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
+            // The title lands with (usually before) the reply —
+            // ref-only needle, waited out in the same leg.
+            let _ = ref_tui.wait_for(TITLE_TEXT.as_bytes(), ref_from, Duration::from_secs(30));
+            replied
+        });
+        (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -364,6 +444,8 @@ fn v19sa_select_action_reset_pair() {
     // Open the Sessions dialog (footer actions carry delete/rename).
     rig.write_both(b"\x18l");
     let ref_open = rig.ref_tui.wait_for_screen(TITLE_TEXT, Duration::from_secs(10));
+    // Timeline duty, NOT padding: the session rows keep filling past
+    // the title needle — the arms below read the full list.
     settle(2);
     export_state(&rig, "v19sa", "open");
     // Arm 1: tab focuses the footer action row; TYPING a filter char
@@ -371,32 +453,38 @@ fn v19sa_select_action_reset_pair() {
     // reset) — enter then submits the selected ROW (navigate), not
     // the stale action.
     rig.write_both(b"\t");
-    settle(1);
+    settle(1); // the footer-action focus repaint
     export_state(&rig, "v19sa", "tab");
     rig.write_both(b"san");
     std::thread::sleep(Duration::from_millis(250));
     export_state_now(&rig, "v19sa", "tabfilter-mid");
+    // Timeline duty, NOT padding: the ref's dialog search rides the
+    // PACED gateway — the searching face resolves to the filtered
+    // list only after the paced round-trip (the v21b toast-dwell
+    // lesson: this window IS the state machine).
     settle(2);
     export_state(&rig, "v19sa", "tabfilter");
     rig.write_both(b"\r");
+    // Timeline duty: the row submit's navigation effect (a session
+    // route change) must land in the settled export.
     settle(3);
     export_state(&rig, "v19sa", "tabfilterenter");
     // Arm 2: reopen, tab, then ↓ — the list move likewise drops the
     // action focus (G-493's move_selection reset); enter submits the
     // row.
     rig.write_both(b"\x1b");
-    settle(1);
+    settle(1); // the dialog/route back-out repaint
     rig.write_both(b"\x18l");
     let ref_reopen = rig.ref_tui.wait_for_screen(TITLE_TEXT, Duration::from_secs(10));
-    settle(2);
+    settle(2); // the reopen's list fill (same window as the first open)
     rig.write_both(b"\t");
-    settle(1);
+    settle(1); // the footer-action focus repaint
     export_state(&rig, "v19sa", "tab2");
     rig.write_both(b"\x1b[B");
-    settle(1);
+    settle(1); // the selection move repaint
     export_state(&rig, "v19sa", "tabdown");
     rig.write_both(b"\r");
-    settle(3);
+    settle(3); // the row submit's navigation effect (as arm 1)
     export_state(&rig, "v19sa", "tabdownenter");
     assert!(
         ref_open && ref_reopen,
@@ -420,16 +508,18 @@ fn v19rn_rename_success_pair() {
     // rename prompt (prefilled with the current title).
     rig.write_both(b"\x18l");
     let ref_open = rig.ref_tui.wait_for_screen(TITLE_TEXT, Duration::from_secs(10));
-    settle(2);
+    settle(2); // the session-list fill (same window as v19sa's open)
     rig.write_both(b"\x12"); // ctrl+r
-    let ref_rename = rig.ref_tui.wait_for_screen("Rename session", Duration::from_secs(10));
-    let rust_rename = rig.rust_tui.wait_for_screen("Rename session", Duration::from_secs(10));
-    settle(1);
+    // slow-audit fix A: the rename-dialog legs run CONCURRENTLY (the
+    // serial two-line form paid the rust leg on top of the ref's).
+    let (rust_rename, ref_rename) =
+        wait_both_screens(&rig.rust_tui, &rig.ref_tui, "Rename session", 10, 10);
+    settle(1); // the prompt's prefill repaint
     export_state(&rig, "v19rn", "open");
     // Type the suffix (the input carries the current title): the new
     // title is deterministic on both ends.
     rig.write_both(b" MARK");
-    settle(1);
+    settle(1); // the typed-text repaint
     export_state(&rig, "v19rn", "typed");
     // Submit: the dialog closes on the rename echo (the port waits
     // for `session.renamed`; the ref closes on the POST then()) — the
@@ -437,12 +527,15 @@ fn v19rn_rename_success_pair() {
     rig.write_both(b"\r");
     std::thread::sleep(Duration::from_millis(250));
     export_state_now(&rig, "v19rn", "enter-now");
+    // Timeline duty, NOT padding: the rename rides the PACED gateway
+    // — the dialog close + the tab-strip retitling land only after
+    // the paced round-trip.
     settle(3);
     export_state(&rig, "v19rn", "enter-settled");
     // The re-opened list carries the renamed row.
     rig.write_both(b"\x18l");
     let ref_relist = rig.ref_tui.wait_for_screen("MARK", Duration::from_secs(10));
-    settle(2);
+    settle(2); // the reopen's list fill
     export_state(&rig, "v19rn", "list-after");
     assert!(
         ref_open && ref_rename && rust_rename && ref_relist,
