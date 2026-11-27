@@ -1014,6 +1014,22 @@
       "g_ref": "G-489/G-490",
       "adjudicated_by": "controller",
       "adjudicated_at": "2026-11-27"
+    },
+    {
+      "id": "w13-perm-reject-rejected-midstream",
+      "scenario_pattern": "w13-perm-reject",
+      "state_pattern": "rejected",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "(?:Writing command|\\$ cargo test|__MS__|__TOKS__|interrupted)"
+        ]
+      },
+      "classification": "expected-shape",
+      "justification": "ADJUDICATED (controller 2026-11-28): the slowF-tightened needle makes the rejected-state capture contention-sensitive — under the merge gate's 4-way rig load the capture can straddle the command-writing transient ('Writing command…' before the '$ cargo test' echo lands) and the timings row's half-updated __MS__/__TOKS__ arms. The solo/anchors-profile runs are byte-identical EXACT (re-verified twice: the lane's final + the controller's solo re-run). The same midstream capture-phase class as the registered w12-midstream-partial-phase/spinner-phase entries. The underlying product faces (the command echo, the interrupted statusline) are identical once settled.",
+      "g_ref": "framework-diff (capture phase)",
+      "adjudicated_by": "controller",
+      "adjudicated_at": "2026-11-28"
     }
   ]
 }
