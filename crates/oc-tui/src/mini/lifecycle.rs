@@ -77,7 +77,7 @@ use opentui_core::renderer::{
 use opentui_core::scrollback::ScrollbackSnapshot;
 
 use super::footer_tree::FooterTree;
-use super::scrollback::{format_commit_with, Commit};
+use super::scrollback::{entry_flags, format_commit_with, separator_rows, Commit};
 use super::splash::{
     directory_label, entry_splash_layout, entry_splash_rows, exit_splash_rows, EntrySplashInput,
 };
@@ -280,6 +280,14 @@ pub struct FooterPane {
     /// settings panel's entry state (the runtime's gates stay
     /// authoritative).
     pub settings_summary: crate::components::footer::state::MiniSettings,
+    /// G-545 — the footer's transient notice (the FooterState's
+    /// `notice`, footer.ts:249): `setNotice` (footer.ts:713-722)
+    /// patches it, the statusline shows it (`if (notice()) return
+    /// notice()`, footer.view.tsx:415 — the notice wins over the
+    /// busy/status text), and it clears after
+    /// `NOTICE_DURATION = 3000` ms (footer.ts:120). The ref's notices
+    /// NEVER touch the scrollback.
+    pub notice: Option<(String, Instant)>,
 }
 
 /// G-221 — `state.usage` (footer.view.tsx:213-218): the summed step
@@ -327,6 +335,10 @@ pub struct StartupRow {
 /// `(frames.length - 1) * interval` = 20 × 40 ms.
 pub const STARTUP_DURATION_MS: u64 = (21 - 1) * 40;
 
+/// G-545 — `NOTICE_DURATION` (footer.ts:120): the footer notice's
+/// 3-second window.
+pub const NOTICE_DURATION: std::time::Duration = std::time::Duration::from_millis(3000);
+
 impl FooterPane {
     #[must_use]
     pub fn new(theme: crate::components::footer::FooterTheme) -> Self {
@@ -365,6 +377,34 @@ impl FooterPane {
             panel: PanelState::default(),
             leader_armed: false,
             settings_summary: crate::components::footer::state::resolve_mini_settings(),
+            notice: None,
+        }
+    }
+
+    /// G-545 — `setNotice(status)` (footer.ts:713-722): patch the
+    /// footer notice state; the 3 s timer (`NOTICE_DURATION`,
+    /// footer.ts:120) clears it (the flush tick drives the expiry —
+    /// the port's RD-19 one-shot pattern). No scrollback row.
+    pub fn set_notice(&mut self, text: &str) {
+        self.notice =
+            if text.is_empty() { None } else { Some((text.to_owned(), std::time::Instant::now())) };
+    }
+
+    /// The live notice text (`state().notice`) — `None` once the
+    /// 3 s window elapsed.
+    #[must_use]
+    pub fn notice_text(&self) -> Option<&str> {
+        self.notice
+            .as_ref()
+            .filter(|(_, at)| at.elapsed() < NOTICE_DURATION)
+            .map(|(text, _)| text.as_str())
+    }
+
+    /// The notice expiry (the ref's `setTimeout` clear, footer.ts:
+    /// 717-721): the flush tick checks the 3 s window.
+    pub fn expire_notice(&mut self) {
+        if self.notice.as_ref().is_some_and(|(_, at)| at.elapsed() >= NOTICE_DURATION) {
+            self.notice = None;
         }
     }
 
@@ -1541,7 +1581,11 @@ impl FooterPane {
                         .unwrap_or_else(|| "Default model".to_owned()),
                     model_variant: self.active_variant.clone().unwrap_or_default(),
                     command_shortcut: "ctrl+p".to_owned(),
-                    status_detail: String::new(),
+                    // G-545 — the notice rides the status group
+                    // (footer.view.tsx:415 `if (notice()) return
+                    // notice()` — the notice wins over the busy/
+                    // status text; EMPTY renders nothing).
+                    status_detail: self.notice_text().unwrap_or_default().to_owned(),
                     work,
                     // G-272 — the usage groups (footer.view.tsx:213-
                     // 218, 493-500): `formatContextUsage` + the USD
@@ -1721,9 +1765,27 @@ pub struct LifecycleInput {
 /// The split-footer renderer handle (`createRuntimeLifecycle`'s
 /// Pending scrollback rows: plain text (mono/default styling) or
 /// styled spans (the exit splash's per-cell half-block mark; G-272⑩
-/// styled ENTRY bodies when the mono flag is off).
+/// styled ENTRY bodies when the mono flag is off) — plus the batch's
+/// newline intent (G-540: `entryFlags(commit)` flows into
+/// `createScrollbackWriter`'s `startOnNewLine`/`trailingNewline`,
+/// scrollback.writer.tsx:278-295 — a PROGRESS batch CONTINUES the
+/// entry's row instead of starting a fresh one).
 #[derive(Debug, Clone)]
-enum PendingRows {
+struct PendingRows {
+    rows: PendingRowsKind,
+    /// `startOnNewLine` (renderer.ts:309): a leading newline when the
+    /// cursor sits mid-row. `true` for every batch that starts fresh
+    /// (a separator row, a non-progress entry); `false` only for a
+    /// same-group PROGRESS chunk continuing the tail.
+    start_on_new_line: bool,
+    /// `trailingNewline` (renderer.ts:310): the newline after the
+    /// batch's final row (NOT a blank row — the next batch's start
+    /// owns the cursor).
+    trailing_newline: bool,
+}
+
+#[derive(Debug, Clone)]
+enum PendingRowsKind {
     Plain(Vec<String>),
     Styled(Vec<Vec<crate::layout::StyledSpan>>),
     /// G-272⑩ — styled entry bodies (theme colors + syntax
@@ -1733,12 +1795,12 @@ enum PendingRows {
     EntryStyled(Vec<Vec<crate::layout::StyledSpan>>),
 }
 
-impl PendingRows {
+impl PendingRowsKind {
     fn len(&self) -> usize {
         match self {
-            PendingRows::Plain(rows) => rows.len(),
-            PendingRows::Styled(rows) => rows.len(),
-            PendingRows::EntryStyled(rows) => rows.len(),
+            PendingRowsKind::Plain(rows) => rows.len(),
+            PendingRowsKind::Styled(rows) => rows.len(),
+            PendingRowsKind::EntryStyled(rows) => rows.len(),
         }
     }
 
@@ -1748,11 +1810,11 @@ impl PendingRows {
     /// used).
     fn atoms(&self, index: usize) -> Vec<crate::wrap::Atom> {
         match self {
-            PendingRows::Plain(rows) => {
+            PendingRowsKind::Plain(rows) => {
                 crate::wrap::flatten(&rows[index], crate::style::Style::new())
             }
-            PendingRows::Styled(rows) => crate::wrap::flatten_spans(&rows[index]),
-            PendingRows::EntryStyled(rows) => crate::wrap::flatten_spans(&rows[index]),
+            PendingRowsKind::Styled(rows) => crate::wrap::flatten_spans(&rows[index]),
+            PendingRowsKind::EntryStyled(rows) => crate::wrap::flatten_spans(&rows[index]),
         }
     }
 
@@ -1818,11 +1880,11 @@ fn append_rows(
     width: usize,
     shell_output: bool,
     look: &crate::mini::entry_styled::EntryLook,
-) -> PendingRows {
+) -> PendingRowsKind {
     if mono {
-        PendingRows::Plain(format_commit_with(prev, commit, width, shell_output))
+        PendingRowsKind::Plain(format_commit_with(prev, commit, width, shell_output, true))
     } else {
-        PendingRows::EntryStyled(crate::mini::entry_styled::format_commit_styled_with(
+        PendingRowsKind::EntryStyled(crate::mini::entry_styled::format_commit_styled_with(
             prev,
             commit,
             width,
@@ -1914,6 +1976,12 @@ pub struct Lifecycle {
     pending: Vec<PendingRows>,
     /// The last committed transcript row (separator decisions).
     last_commit: Option<Commit>,
+    /// The surface's `wrote` flag (scrollback.surface.ts:92 — true
+    /// from boot: "the transcript always starts one row below the
+    /// terminal's prior output, even when the entry splash itself is
+    /// hidden", runtime.lifecycle.ts:221-226): the FIRST commit's
+    /// separator (`!rendered && wrote ? 1 : 0`).
+    wrote: bool,
     width: usize,
     #[allow(dead_code)] // kept for resize parity with the reference
     height: usize,
@@ -2039,6 +2107,7 @@ impl Lifecycle {
             pane,
             pending: Vec::new(),
             last_commit: None,
+            wrote: true,
             width,
             height,
             closed: false,
@@ -2117,7 +2186,14 @@ impl Lifecycle {
 
     fn queue_rows(&mut self, rows: Vec<String>) {
         if !rows.is_empty() {
-            self.pending.push(PendingRows::Plain(rows));
+            // The boot/exit splashes write like the ref's spacer rows
+            // (`spacerWriter`, scrollback.writer.tsx:297-309): a fresh
+            // row that closes with its own newline.
+            self.pending.push(PendingRows {
+                rows: PendingRowsKind::Plain(rows),
+                start_on_new_line: true,
+                trailing_newline: true,
+            });
         }
     }
 
@@ -2126,15 +2202,29 @@ impl Lifecycle {
     /// `TextRenderable` pushes).
     fn queue_styled_rows(&mut self, rows: Vec<Vec<crate::layout::StyledSpan>>) {
         if !rows.is_empty() {
-            self.pending.push(PendingRows::Styled(rows));
+            self.pending.push(PendingRows {
+                rows: PendingRowsKind::Styled(rows),
+                start_on_new_line: true,
+                trailing_newline: true,
+            });
         }
     }
 
     /// G-272⑩ — queue styled ENTRY rows (theme-colored scrollback
-    /// bodies; flushes through the opentui styled commit seam).
-    fn queue_entry_styled_rows(&mut self, rows: Vec<Vec<crate::layout::StyledSpan>>) {
+    /// bodies; flushes through the opentui styled commit seam) with
+    /// the batch's newline intent (G-540).
+    fn queue_entry_styled_rows(
+        &mut self,
+        rows: Vec<Vec<crate::layout::StyledSpan>>,
+        start_on_new_line: bool,
+        trailing_newline: bool,
+    ) {
         if !rows.is_empty() {
-            self.pending.push(PendingRows::EntryStyled(rows));
+            self.pending.push(PendingRows {
+                rows: PendingRowsKind::EntryStyled(rows),
+                start_on_new_line,
+                trailing_newline,
+            });
         }
     }
 
@@ -2146,6 +2236,14 @@ impl Lifecycle {
         self.mono = mono;
     }
 
+    /// G-545 — `setNotice(status)` (footer.ts:713-722) on the footer
+    /// state: a transient 3 s statusline notice (footer.view.tsx:415),
+    /// never a scrollback row.
+    pub fn set_notice(&mut self, text: &str) {
+        self.pane.set_notice(text);
+        self.force_draw = true;
+    }
+
     /// `footer.append` → scrollback rows (`entryWriter`,
     /// `scrollback.writer.tsx:278-295`) — the `mini.shell_output`
     /// knob rides the entry-body call (`scrollback.surface.ts:457`).
@@ -2153,7 +2251,22 @@ impl Lifecycle {
     /// keeps the plain writer (the ref's `mono.ts` gate); styled
     /// commits carry theme colors + syntax highlight through the
     /// styled seam.
+    /// G-540 — `entryFlags(commit)` flows into the batch's newline
+    /// intent (`createScrollbackWriter`, scrollback.writer.tsx:
+    /// 278-295): an Assistant/Reasoning/Tool PROGRESS chunk CONTINUES
+    /// the entry's row (`startOnNewLine: false`) and leaves the row
+    /// open (`trailingNewline: false`); a separator row (or the boot
+    /// `wrote` spacer, scrollback.surface.ts:484's
+    /// `rows || (!this.rendered && this.wrote ? 1 : 0)` — the
+    /// transcript starts one row below the prior output,
+    /// runtime.lifecycle.ts:221-226 `wrote: true`) always starts a
+    /// fresh row.
     pub fn append(&mut self, commit: Commit) {
+        if self.last_commit.is_none() && self.wrote {
+            self.queue_rows(vec![String::new()]);
+        }
+        let separator = separator_rows(self.last_commit.as_ref(), &commit) > 0;
+        let (entry_start, entry_trailing) = entry_flags(&commit);
         let rows = append_rows(
             self.mono,
             self.last_commit.as_ref(),
@@ -2162,11 +2275,24 @@ impl Lifecycle {
             self.shell_output,
             &self.entry_look,
         );
+        self.wrote = true;
         self.last_commit = Some(commit);
         match rows {
-            PendingRows::Plain(rows) => self.queue_rows(rows),
-            PendingRows::EntryStyled(rows) => self.queue_entry_styled_rows(rows),
-            PendingRows::Styled(_) => unreachable!("append_rows never produces the splash arm"),
+            PendingRowsKind::Plain(rows) => {
+                self.pending.push(PendingRows {
+                    rows: PendingRowsKind::Plain(rows),
+                    start_on_new_line: separator || entry_start,
+                    trailing_newline: entry_trailing,
+                });
+            }
+            PendingRowsKind::EntryStyled(rows) => {
+                self.queue_entry_styled_rows(
+                    rows,
+                    separator || entry_start,
+                    entry_trailing,
+                );
+            }
+            PendingRowsKind::Styled(_) => unreachable!("append_rows never produces the splash arm"),
         }
     }
 
@@ -2177,6 +2303,14 @@ impl Lifecycle {
     pub fn flush(&mut self) -> Result<(), String> {
         self.reconcile_scrollback_region()?;
         self.finish_startup();
+        // G-545 — the notice's 3 s window (the flush tick drives the
+        // ref's setTimeout clear, footer.ts:717-721); an expiry forces
+        // the repaint.
+        let notice_before = self.pane.notice.is_some();
+        self.pane.expire_notice();
+        if notice_before && self.pane.notice.is_none() {
+            self.force_draw = true;
+        }
         if !self.pending.is_empty() {
             if self.closed || !self.solid.renderer.is_split_footer_capture_active() {
                 // Post-close rows (SSE folds that landed while the
@@ -2200,7 +2334,7 @@ impl Lifecycle {
         let mut lines_written = 0usize;
         self.park_transcript_cursor()?;
         while let Some(batch) = self.pending.first().cloned() {
-            for line in batch.ansi_rows(self.width.max(1)) {
+            for line in batch.rows.ansi_rows(self.width.max(1)) {
                 // Each row ends with its CR; the LF separator rides
                 // here (the raw-mode `\r\n` pair).
                 bytes.push_str(line.trim_end_matches(' '));
@@ -2231,83 +2365,136 @@ impl Lifecycle {
     /// The dock's rows erase FIRST (the engine's stream scrolls the
     /// whole screen — a painted dock would scroll up as a ghost into
     /// the scrollback); the following [`Self::draw_footer`] repaints
-    /// the dock at the bottom. `startOnNewLine`/`trailingNewline` own
-    /// the newline intent (every mini commit starts and ends on a
-    /// fresh row, so the tail column resets per commit).
+    /// the dock at the bottom. G-540 — `startOnNewLine`/
+    /// `trailingNewline` own the newline intent per BATCH
+    /// (`entryFlags(commit)`, scrollback.writer.tsx:278-295): a
+    /// PROGRESS chunk continues the tail column (the ref's
+    /// `firstLineWidth` clamp, index.bun.js:1287-1292), so every
+    /// batch parks at its OWN start column (fresh ⇒ column 1;
+    /// continuing ⇒ the engine's pending tail + 1) and flushes
+    /// before the next batch queues — the byte stream's cursor
+    /// position stays exact through continuations.
     fn write_scrollback(&mut self) -> Result<(), String> {
         let row_columns = u32::try_from(self.width.max(1)).unwrap_or(u32::MAX);
-        let mut lines_written = 0usize;
+        let width = self.width.max(1);
         while let Some(batch) = self.pending.first().cloned() {
+            // The queue is empty at the loop head (the previous
+            // iteration drained its own commits), so the engine's
+            // pending tail IS the current tail — where THIS batch
+            // starts (the ref's `ctx.tailColumn`).
+            let start_tail =
+                usize::try_from(self.solid.renderer.get_pending_split_tail_column()).unwrap_or(0);
+            let row_count = batch.rows.len();
             // G-272⑩ — styled ENTRY batches ride the opentui styled
             // commit seam (span payloads: row widths count span text,
-            // SGR runs serialized by the engine). The newline flags
-            // stay EXACTLY the plain path's (start/trailing on — the
-            // append-only contract and the G-68/G-221 folds keep
-            // their shape).
-            if let PendingRows::EntryStyled(rows) = &batch {
-                let styled = crate::mini::entry_styled::styled_rows_to_captured(rows);
-                if !styled.is_empty() {
-                    lines_written += styled.len();
-                    self.solid
-                        .renderer
-                        .write_styled_to_scrollback(Box::new(move |_ctx| {
-                            opentui_core::scrollback::StyledScrollbackSnapshot {
-                                lines: styled,
-                                row_columns: Some(row_columns),
-                                start_on_new_line: Some(true),
-                                trailing_newline: Some(true),
-                            }
-                        }))
-                        .map_err(|error| match error {
-                            opentui_core::renderer::ScrollbackWriteError::CaptureNotActive => {
-                                "writeToScrollback: the split-footer capture is not active"
-                                    .to_owned()
-                            }
-                            opentui_core::renderer::ScrollbackWriteError::EmptySnapshot => {
-                                "writeToScrollback: the writer returned no rows".to_owned()
-                            }
-                        })?;
+            // SGR runs serialized by the engine). G-540 — the newline
+            // flags ride the batch (the entry's own flags).
+            match &batch.rows {
+                PendingRowsKind::EntryStyled(rows) => {
+                    let styled = crate::mini::entry_styled::styled_rows_to_captured(rows);
+                    if !styled.is_empty() {
+                        self.solid
+                            .renderer
+                            .write_styled_to_scrollback(Box::new(move |_ctx| {
+                                opentui_core::scrollback::StyledScrollbackSnapshot {
+                                    lines: styled,
+                                    row_columns: Some(row_columns),
+                                    start_on_new_line: Some(batch.start_on_new_line),
+                                    trailing_newline: Some(batch.trailing_newline),
+                                }
+                            }))
+                            .map_err(|error| match error {
+                                opentui_core::renderer::ScrollbackWriteError::CaptureNotActive => {
+                                    "writeToScrollback: the split-footer capture is not active"
+                                        .to_owned()
+                                }
+                                opentui_core::renderer::ScrollbackWriteError::EmptySnapshot => {
+                                    "writeToScrollback: the writer returned no rows".to_owned()
+                                }
+                            })?;
+                    }
                 }
-                self.pending.remove(0);
-                continue;
-            }
-            let lines = batch.ansi_rows(self.width.max(1));
-            if !lines.is_empty() {
-                lines_written += lines.len();
-                self.solid
-                    .renderer
-                    .write_to_scrollback(Box::new(move |_ctx| ScrollbackSnapshot {
-                        lines,
-                        row_columns: Some(row_columns),
-                        start_on_new_line: Some(true),
-                        trailing_newline: Some(true),
-                    }))
-                    .map_err(|error| match error {
-                        opentui_core::renderer::ScrollbackWriteError::CaptureNotActive => {
-                            "writeToScrollback: the split-footer capture is not active".to_owned()
-                        }
-                        opentui_core::renderer::ScrollbackWriteError::EmptySnapshot => {
-                            "writeToScrollback: the writer returned no rows".to_owned()
-                        }
-                    })?;
+                kind => {
+                    let lines = kind.ansi_rows(width);
+                    if !lines.is_empty() {
+                        self.solid
+                            .renderer
+                            .write_to_scrollback(Box::new(move |_ctx| ScrollbackSnapshot {
+                                lines,
+                                row_columns: Some(row_columns),
+                                start_on_new_line: Some(batch.start_on_new_line),
+                                trailing_newline: Some(batch.trailing_newline),
+                            }))
+                            .map_err(|error| match error {
+                                opentui_core::renderer::ScrollbackWriteError::CaptureNotActive => {
+                                    "writeToScrollback: the split-footer capture is not active"
+                                        .to_owned()
+                                }
+                                opentui_core::renderer::ScrollbackWriteError::EmptySnapshot => {
+                                    "writeToScrollback: the writer returned no rows".to_owned()
+                                }
+                            })?;
+                    }
+                }
             }
             self.pending.remove(0);
+            // Park the cursor at the batch's start column (the dock
+            // paint left it mid-dock; the engine's stream writes from
+            // the cursor), then flush THIS batch before the next one
+            // queues — a continuing batch's bytes must land at the
+            // recorded tail, which the NEXT park re-derives from the
+            // flushed state.
+            self.park_transcript_cursor_at(start_tail)?;
+            let _ = self.solid.renderer.flush_pending_split_commits(true, true);
+            // The row advance: the first row continues at the tail
+            // (the terminal's auto-wrap may consume extra rows —
+            // `(tail + width0 - 1) / width`, the engine's
+            // `advanceSplitTailColumn` row half), the later rows are
+            // newline-separated, and the trailing newline closes the
+            // final row.
+            let first_width = self.pending_first_row_width(&batch).min(row_columns as usize);
+            let wraps =
+                if first_width > 0 { (start_tail + first_width - 1) / width.max(1) } else { 0 };
+            let trailing = usize::from(batch.trailing_newline);
+            let advance = wraps + row_count.saturating_sub(1) + trailing;
+            let bottom = self.region_bottom.max(1);
+            self.transcript_row = (self.transcript_row + advance).min(bottom);
         }
-        // Park the cursor at the transcript position (the dock paint
-        // left it mid-dock; the engine's stream writes from the
-        // cursor), flush, then advance the tracked row (clamped at
-        // the region bottom — the trailing newline scrolls in place
-        // there).
-        self.park_transcript_cursor()?;
-        let _ = self.solid.renderer.flush_pending_split_commits(true, true);
-        let bottom = self.region_bottom.max(1);
-        self.transcript_row = (self.transcript_row + lines_written).min(bottom);
         self.force_draw = true;
         Ok(())
     }
 
-    /// CUP to the transcript band's tracked row (column 1 — every
-    /// commit ends on a fresh row).
+    /// The batch's FIRST row display width (the engine's
+    /// `rowWidths` shape: the occupied cells, trailing blanks
+    /// trimmed — renderer.ts:2497-2519) — the wrap math for a
+    /// continuing row.
+    fn pending_first_row_width(&self, batch: &PendingRows) -> usize {
+        if batch.rows.len() == 0 {
+            return 0;
+        }
+        let text: String = match &batch.rows {
+            PendingRowsKind::Plain(rows) => rows[0].clone(),
+            PendingRowsKind::Styled(rows) | PendingRowsKind::EntryStyled(rows) => {
+                rows[0].iter().map(|span| span.text.as_str()).collect()
+            }
+        };
+        crate::wrap::display_width(text.trim_end_matches([' ', '\r']))
+    }
+
+    /// CUP to the transcript band's tracked row at the batch's start
+    /// column: a fresh batch at column 1; a continuing batch at the
+    /// tail column + 1 (CUP is 1-based; a tail at the wrap edge rolls
+    /// onto the next row).
+    fn park_transcript_cursor_at(&mut self, tail: usize) -> Result<(), String> {
+        let width = self.width.max(1);
+        let row = (self.transcript_row + tail / width)
+            .clamp(1, self.height.max(1));
+        let col = tail % width + 1;
+        self.write_raw(format!("\x1b[{row};{col}H").as_bytes())
+    }
+
+    /// CUP to the transcript band's tracked row (column 1 — the
+    /// passthrough arm's fresh-row park).
     fn park_transcript_cursor(&mut self) -> Result<(), String> {
         let row = self.transcript_row.clamp(1, self.height.max(1));
         self.write_raw(format!("\x1b[{row};1H").as_bytes())
@@ -2643,7 +2830,7 @@ mod tests {
         let look = EntryLook::fallback_dark();
         // mono: the plain writer's unstyled rows.
         match append_rows(true, None, &commit, 40, true, &look) {
-            PendingRows::Plain(rows) => {
+            PendingRowsKind::Plain(rows) => {
                 assert!(rows.iter().any(|row| row.contains("bold")), "{rows:?}");
             }
             other => panic!("mono append must be plain rows: {other:?}"),
@@ -2651,7 +2838,7 @@ mod tests {
         // toggled off (set_mono(false) mid-session): the next append
         // produces styled entry rows (markdown-rendered, spanned).
         match append_rows(false, None, &commit, 40, true, &look) {
-            PendingRows::EntryStyled(rows) => {
+            PendingRowsKind::EntryStyled(rows) => {
                 assert!(
                     rows.iter()
                         .any(|row| row.iter().any(|span| span.style != crate::style::Style::new())),
@@ -2664,32 +2851,40 @@ mod tests {
 
     #[test]
     fn ansi_rows_carry_style_runs_and_reset() {
-        use super::PendingRows;
-        let plain = PendingRows::Plain(vec!["hello".to_owned(), String::new()]);
+        use super::{PendingRows, PendingRowsKind};
+        let plain = PendingRows {
+            rows: PendingRowsKind::Plain(vec!["hello".to_owned(), String::new()]),
+            start_on_new_line: true,
+            trailing_newline: true,
+        };
         // A plain row carries only the reset bookends (no color/attr
         // runs) plus the trailing CR — the retired writer's exact
         // shape split across the row payload and the engine's LF.
-        let rows = plain.ansi_rows(80);
+        let rows = plain.rows.ansi_rows(80);
         assert_eq!(rows.len(), 2);
         assert!(rows[0].trim_matches('\x1b').contains("hello"), "{rows:?}");
         assert!(rows[0].ends_with('\r'), "the CR half of the row pair: {rows:?}");
         assert_eq!(rows[1], "\r");
-        let styled = PendingRows::Styled(vec![vec![
-            crate::layout::StyledSpan {
-                text: "go".to_owned(),
-                style: crate::style::Style {
-                    fg: Some(crate::style::Color::Indexed(231)),
-                    ..crate::style::Style::new()
+        let styled = PendingRows {
+            rows: PendingRowsKind::Styled(vec![vec![
+                crate::layout::StyledSpan {
+                    text: "go".to_owned(),
+                    style: crate::style::Style {
+                        fg: Some(crate::style::Color::Indexed(231)),
+                        ..crate::style::Style::new()
+                    },
+                    link: None,
                 },
-                link: None,
-            },
-            crate::layout::StyledSpan {
-                text: " off".to_owned(),
-                style: crate::style::Style::new(),
-                link: None,
-            },
-        ]]);
-        let rows = styled.ansi_rows(80);
+                crate::layout::StyledSpan {
+                    text: " off".to_owned(),
+                    style: crate::style::Style::new(),
+                    link: None,
+                },
+            ]]),
+            start_on_new_line: true,
+            trailing_newline: true,
+        };
+        let rows = styled.rows.ansi_rows(80);
         assert_eq!(rows.len(), 1);
         assert!(rows[0].starts_with("\x1b[0m"), "a boundary opens from reset");
         assert!(rows[0].contains("38;5;231"), "the indexed fg opens: {}", rows[0]);
@@ -2697,8 +2892,16 @@ mod tests {
         // The styled run's text survives the SGR boundaries.
         assert!(rows[0].contains("go") && rows[0].contains(" off"), "{}", rows[0]);
         // The width clamp drops atoms past the budget.
-        let wide = PendingRows::Plain(vec!["abcdefgh".to_owned()]);
-        assert!(wide.ansi_rows(3)[0].contains("abc"), "clamped: {:?}", wide.ansi_rows(3));
+        let wide = PendingRows {
+            rows: PendingRowsKind::Plain(vec!["abcdefgh".to_owned()]),
+            start_on_new_line: true,
+            trailing_newline: true,
+        };
+        assert!(
+            wide.rows.ansi_rows(3)[0].contains("abc"),
+            "clamped: {:?}",
+            wide.rows.ansi_rows(3)
+        );
     }
 
     /// G-181③ — the poll's size-decision table: only a real 0×0-free

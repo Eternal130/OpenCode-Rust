@@ -22,7 +22,7 @@
 //! theme switching. The mono flag keeps the ENTIRE plain path (the
 //! ref's `mono.ts` gate): `Lifecycle::append` dispatches on it.
 
-use super::scrollback::{entry_body_with, entry_flags, separator_rows, Commit, CommitKind, Phase};
+use super::scrollback::{entry_body_with, separator_rows, Commit, CommitKind, Phase};
 use super::theme::scrollback_color;
 use crate::layout::StyledSpan;
 use crate::render::CellColor;
@@ -105,7 +105,6 @@ pub fn format_commit_styled_with(
     look: &EntryLook,
 ) -> Vec<Vec<StyledSpan>> {
     let width = width.max(1);
-    let (_, trailing_newline) = entry_flags(commit);
     let mut rows: Vec<Vec<StyledSpan>> = Vec::new();
     if prev.is_some() && separator_rows(prev, commit) > 0 {
         rows.push(Vec::new());
@@ -125,9 +124,9 @@ pub fn format_commit_styled_with(
             rows.extend(wrap_styled(&row, width));
         }
     }
-    if trailing_newline && !rows.is_empty() {
-        rows.push(Vec::new());
-    }
+    // G-540 — the trailing newline is the BATCH's `trailingNewline`
+    // flag (the engine's newline intent), not a blank row; the styled
+    // writer keeps the mono writer's row shape byte-for-byte.
     rows
 }
 
@@ -218,7 +217,7 @@ fn entry_body_styled(
     // fallbacks identical), painted with the kind look (the shell `$`
     // start caption muted).
     let kind_style = look.for_kind(commit.kind);
-    let plain = entry_body_with(commit, shell_output);
+    let plain = entry_body_with(commit, shell_output, false);
     let mut rows = Vec::with_capacity(plain.len());
     for row in &plain {
         let style = if commit.shell.is_some() && commit.phase == Phase::Start {

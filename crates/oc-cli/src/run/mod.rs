@@ -367,12 +367,18 @@ async fn resolve_session_target(
         .map(|(provider_id, id, variant)| ModelRef { provider_id, id, variant });
     // v2's `prepare` only falls back to a default for NEW sessions
     // (`session.create` carries the model); a resumed session keeps
-    // `session.model` and a plain run never switches it. Falling back here
-    // unconditionally would reset every `run -c`/`run -s` session to the
-    // location default (gate-7 F3).
+    // `session.model` and a plain run never switches it. Falling back
+    // here unconditionally would reset every `run -c`/`run -s` session to
+    // the location default (gate-7 F3).
+    // G-544 — the resume arm resolves the STORED session model
+    // (`model: input.model ?? selected?.model`, session-target.ts:57):
+    // the mini's `--continue` boots with the resumed session's model
+    // (the statusline label + the turn summary read it) instead of the
+    // "Default model" face — the plain-run default below stays
+    // NEW-session-only.
     let model = match model {
         Some(model) => Some(model),
-        None if resume => None,
+        None if resume => selected.model.clone(),
         None => client
             .model()
             .default(&oc_client::types::ModelDefaultQuery {

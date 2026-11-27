@@ -288,15 +288,17 @@ pub fn canonical_tool_name(name: &str) -> &str {
 /// nothing).
 #[must_use]
 pub fn entry_body(commit: &Commit) -> Vec<String> {
-    entry_body_with(commit, true)
+    entry_body_with(commit, true, true)
 }
 
-/// `entryBody(commit, { shellOutput })` (`tool.ts:1278-1301` —
-/// CONFIG-T4's `mini.shell_output`): a shell-family tool's streaming
-/// rows vanish when the knob hides them (the start caption and the
-/// final row always render — v2 gates only the live output body).
+/// `entryBody(commit, { shellOutput, mono })` (`tool.ts:1278-1301` —
+/// CONFIG-T4's `mini.shell_output`; G-543 — the `mono` flag carries
+/// `userBody`'s glyph, entry.body.ts:52-60): a shell-family tool's
+/// streaming rows vanish when the knob hides them (the start caption
+/// and the final row always render — v2 gates only the live output
+/// body).
 #[must_use]
-pub fn entry_body_with(commit: &Commit, shell_output: bool) -> Vec<String> {
+pub fn entry_body_with(commit: &Commit, shell_output: bool, mono: bool) -> Vec<String> {
     let raw = commit.text.replace("\r\n", "\n").replace('\r', "\n");
     // G-221 — `toolEntryBody`'s `commit.shell` branch (tool.ts:1282-
     // 1294): the DIRECT-shell rows — `$ command` on start, the merged
@@ -336,7 +338,7 @@ pub fn entry_body_with(commit: &Commit, shell_output: bool) -> Vec<String> {
         vec![raw.trim().to_owned()]
     } else {
         match commit.kind {
-            CommitKind::User => user_rows(&raw),
+            CommitKind::User => user_rows(&raw, mono),
             CommitKind::Assistant => match commit.phase {
                 Phase::Start => Vec::new(),
                 Phase::Final if commit.interrupted => vec!["assistant interrupted".to_owned()],
@@ -361,15 +363,17 @@ pub fn entry_body_with(commit: &Commit, shell_output: bool) -> Vec<String> {
     rows.into_iter().filter(|row| !row.is_empty() || commit.kind == CommitKind::User).collect()
 }
 
-/// `userBody` (`entry.body.ts:52-60`): leading newlines kept, then the
-/// `>` mono prefix on the first row.
-fn user_rows(raw: &str) -> Vec<String> {
+/// `userBody` (`entry.body.ts:52-60`): leading newlines kept, then
+/// the `› ` prefix on the first row (the `> ` mono form,
+/// `mono ? ">" : "›"`).
+fn user_rows(raw: &str, mono: bool) -> Vec<String> {
     if raw.trim().is_empty() {
         return Vec::new();
     }
     let lead: String = raw.chars().take_while(|c| *c == '\n').collect();
     let body = &raw[lead.len()..];
-    let first = format!("{lead}> {body}");
+    let prefix = if mono { ">" } else { "›" };
+    let first = format!("{lead}{prefix} {body}");
     vec![first]
 }
 
@@ -476,25 +480,26 @@ fn shell_output_rows(command: &str, raw: &str) -> Vec<String> {
 }
 
 /// `format_commit`: the full scrollback rows for one commit — the
-/// separator (when flagged), the word-wrapped body rows at the
-/// terminal width, and the trailing blank row (`trailingNewline`).
+/// separator (when flagged) and the word-wrapped body rows at the
+/// terminal width (G-540: the trailing newline is the BATCH's
+/// `trailingNewline` flag, not a blank row — the ref's writer owns it
+/// via `createScrollbackWriter`'s options).
 #[must_use]
 pub fn format_commit(prev: Option<&Commit>, commit: &Commit, width: usize) -> Vec<String> {
-    format_commit_with(prev, commit, width, true)
+    format_commit_with(prev, commit, width, true, true)
 }
 
-/// `format_commit` with the `mini.shell_output` knob
-/// (`scrollback.surface.ts:457`'s `entryBody(commit, { shellOutput })`
-/// pass-through — CONFIG-T4).
+/// `format_commit` with the `mini.shell_output` + mono knobs
+/// (`scrollback.surface.ts:457`'s `entryBody(commit, { shellOutput,
+/// mono })` pass-through — CONFIG-T4 + G-543's `userBody` glyph).
 #[must_use]
 pub fn format_commit_with(
     prev: Option<&Commit>,
     commit: &Commit,
     width: usize,
     shell_output: bool,
+    mono: bool,
 ) -> Vec<String> {
-    let (start_on_new_line, trailing_newline) = entry_flags(commit);
-    let _ = start_on_new_line; // the mono writer always starts entries on new rows
     let mut rows = Vec::new();
     if prev.is_some() && separator_rows(prev, commit) > 0 {
         rows.push(String::new());
@@ -508,16 +513,13 @@ pub fn format_commit_with(
         rows.push(commit.text.clone());
         return rows;
     }
-    let body = entry_body_with(commit, shell_output);
+    let body = entry_body_with(commit, shell_output, mono);
     for row in body {
         if row.is_empty() {
             rows.push(String::new());
             continue;
         }
         rows.extend(wrap_label(&row, width.max(1)));
-    }
-    if trailing_newline && !rows.is_empty() {
-        rows.push(String::new());
     }
     rows
 }
@@ -640,6 +642,10 @@ mod tests {
             Vec::<String>::new(),
             "blank user rows vanish"
         );
+        // G-543 — the NON-mono arm carries `userBody`'s `›` glyph
+        // (`mono ? ">" : "›"`, entry.body.ts:52-60 — the v2 default
+        // writer).
+        assert_eq!(entry_body_with(&Commit::user("hello world"), true, false), vec!["› hello world"]);
     }
 
     #[test]
@@ -789,7 +795,7 @@ fn direct_shell_rows_render_the_command_and_output() {
     // The knob: direct-shell output always renders; the
     // TOOL-CALL (bash) progress row still hides.
     assert_eq!(
-        entry_body_with(&shell("hi\n", Phase::Progress, None), false),
+        entry_body_with(&shell("hi\n", Phase::Progress, None), false, true),
         vec![String::new(), "hi".to_owned()]
     );
     let bash = Commit {
@@ -799,8 +805,8 @@ fn direct_shell_rows_render_the_command_and_output() {
         text: "raw output".to_owned(),
         ..Commit::default()
     };
-    assert_eq!(entry_body_with(&bash, false).len(), 0);
-    assert_eq!(entry_body_with(&bash, true), vec!["raw output"]);
+    assert_eq!(entry_body_with(&bash, false, true).len(), 0);
+    assert_eq!(entry_body_with(&bash, true, true), vec!["raw output"]);
 }
 
 // -- G-134 ---------------------------------------------------------

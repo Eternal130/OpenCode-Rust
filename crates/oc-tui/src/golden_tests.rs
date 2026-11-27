@@ -584,6 +584,7 @@ fn command_palette_frame(width: u16, height: u16) -> Frame {
         value: String::new(),
         prompt_cursor: None,
         prompt_viewport: None,
+        prompt_vband: None,
         prompt_history: crate::store::DialogPromptHistory::default(),
         theme_initial: None,
     };

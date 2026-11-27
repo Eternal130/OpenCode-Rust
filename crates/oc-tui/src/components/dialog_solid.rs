@@ -190,13 +190,23 @@ fn styled(chunks: Vec<TextChunk>) -> StyledText {
 /// never moves.
 fn prompt_input_chunks(
     value: &str,
-    cursor: usize,
+    cursor: Option<usize>,
     offset: usize,
     width: usize,
     fg: Rgb,
     surface: Rgb,
     text: Rgb,
 ) -> Vec<TextChunk> {
+    let Some(cursor) = cursor else {
+        // G-542/G-546 — the caret is OFF the band's row: the visible
+        // row renders with NO cursor cell (the ref's cursor lives on
+        // the caret's row, which is not the visible one).
+        let head = take_width_window(value, offset, width);
+        if head.is_empty() {
+            return Vec::new();
+        }
+        return vec![chunk(head, fg, None, 0)];
+    };
     let cursor = cursor.min(value.chars().count());
     let byte = value.char_indices().nth(cursor).map_or(value.len(), |(byte, _)| byte);
     let (before, after) = value.split_at(byte);
@@ -399,8 +409,10 @@ struct DialogInputs {
     /// shows when the whole buffer is empty — an empty caret line of
     /// a multi-line value renders a blank row, not the placeholder).
     prompt_has_value: bool,
-    /// G-532 — the cursor's CHAR position within the caret's line.
-    prompt_cursor: usize,
+    /// G-542/G-546 — the cursor's char position on the BAND row
+    /// (`None` while the caret is off-band — no cursor cell; G-532's
+    /// whole-value non-emptiness governs the placeholder above).
+    prompt_cursor: Option<usize>,
     /// G-527/G-532 — the prompt viewport's WITHIN-LINE cell offset
     /// (the entry's resolved `prompt_viewport_offset()` — the stateful
     /// band clamp against the caret's within-line column).
@@ -3379,7 +3391,7 @@ fn build_inputs(
                 title_suffix: props.title_suffix.clone().unwrap_or_default(),
                 prompt_value: String::new(),
                 prompt_has_value: false,
-                prompt_cursor: 0,
+                prompt_cursor: None,
                 prompt_viewport: 0,
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
@@ -3555,7 +3567,7 @@ fn build_inputs(
                 title_suffix: String::new(),
                 prompt_value: String::new(),
                 prompt_has_value: false,
-                prompt_cursor: 0,
+                prompt_cursor: None,
                 prompt_viewport: 0,
                 hint_lines: Vec::new(),
                 plugin_title: "/btw".to_owned(),
@@ -3664,7 +3676,7 @@ fn build_inputs(
                 title_suffix: String::new(),
                 prompt_value: String::new(),
                 prompt_has_value: false,
-                prompt_cursor: 0,
+                prompt_cursor: None,
                 prompt_viewport: 0,
                 hint_lines: crate::wrap::wrap_label(&hint, content_width.max(1)),
                 plugin_title: String::new(),
@@ -3725,7 +3737,7 @@ fn build_inputs(
                 title_suffix: String::new(),
                 prompt_value: String::new(),
                 prompt_has_value: false,
-                prompt_cursor: 0,
+                prompt_cursor: None,
                 prompt_viewport: 0,
                 hint_lines: Vec::new(),
                 plugin_title: content.title,
@@ -3800,7 +3812,7 @@ fn build_inputs(
                 title_suffix: String::new(),
                 prompt_value: String::new(),
                 prompt_has_value: false,
-                prompt_cursor: 0,
+                prompt_cursor: None,
                 prompt_viewport: 0,
                 hint_lines: Vec::new(),
                 plugin_title,
@@ -3854,7 +3866,7 @@ fn build_inputs(
                 title_suffix: String::new(),
                 prompt_value: String::new(),
                 prompt_has_value: false,
-                prompt_cursor: 0,
+                prompt_cursor: None,
                 prompt_viewport: 0,
                 hint_lines: Vec::new(),
                 plugin_title: title.clone(),
@@ -3912,7 +3924,7 @@ fn build_inputs(
                 title_suffix: String::new(),
                 prompt_value: String::new(),
                 prompt_has_value: false,
-                prompt_cursor: 0,
+                prompt_cursor: None,
                 prompt_viewport: 0,
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
@@ -3981,7 +3993,7 @@ fn build_inputs(
                 title_suffix: String::new(),
                 prompt_value: String::new(),
                 prompt_has_value: false,
-                prompt_cursor: 0,
+                prompt_cursor: None,
                 prompt_viewport: 0,
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
@@ -4025,7 +4037,7 @@ fn build_inputs(
             title_suffix: String::new(),
             prompt_value: String::new(),
             prompt_has_value: false,
-            prompt_cursor: 0,
+            prompt_cursor: None,
             prompt_viewport: 0,
             // The status rows ride the hints (the props layer derives
             // them — see the `DialogKind::Status` props arm).
@@ -4072,7 +4084,7 @@ fn build_inputs(
             title_suffix: String::new(),
             prompt_value: String::new(),
             prompt_has_value: false,
-            prompt_cursor: 0,
+            prompt_cursor: None,
             prompt_viewport: 0,
             hint_lines: Vec::new(),
             plugin_title: String::new(),
@@ -4116,7 +4128,7 @@ fn build_inputs(
             title_suffix: String::new(),
             prompt_value: String::new(),
             prompt_has_value: false,
-            prompt_cursor: 0,
+            prompt_cursor: None,
             prompt_viewport: 0,
             hint_lines: props.hints.clone(),
             plugin_title: String::new(),
@@ -4165,6 +4177,7 @@ mod d22_tests {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
+            prompt_vband: None,
             prompt_history: crate::store::DialogPromptHistory::default(),
             theme_initial: None,
         }
@@ -4301,7 +4314,7 @@ mod d22_tests {
         let surface: Rgb = (20, 20, 20);
         let text: Rgb = (240, 240, 240);
         let shape = |value: &str, cursor: usize, offset: usize, width: usize| {
-            prompt_input_chunks(value, cursor, offset, width, fg, surface, text)
+            prompt_input_chunks(value, Some(cursor), offset, width, fg, surface, text)
                 .iter()
                 .map(|chunk| (chunk.text.clone(), chunk.bg.is_some()))
                 .collect::<Vec<_>>()

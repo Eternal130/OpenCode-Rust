@@ -248,23 +248,30 @@ const ED_FIXTURE: &str = r#"export default {
         })
         .then((value) => {
           report("prompt " + String(value));
+          // va21g — the select phase CHAINS off the prompt's settle
+          // (the v21c landmine class: the old t+96 s ABSOLUTE timer
+          // raced the scenario legs — any ref speedup turned the rig
+          // red). The prompt's promise settles on the rig's esc
+          // marker; the select arms 4 s after it (the v21c chained
+          // form, with the arm wide enough that the esc marker's
+          // capture completes first on both ends).
+          setTimeout(() => {
+            ctx.ui.dialog
+              .select({
+                title: "v21f paste",
+                options: [
+                  { title: "Theme Light", value: "theme-light", category: "Palette" },
+                  { title: "Terminal", value: "terminal", category: "Palette" },
+                  { title: "Thermometer", value: "thermometer", category: "Palette" },
+                  { title: "Almanac", value: "almanac", category: "Books" },
+                ],
+              })
+              .then((value) => {
+                report("sel " + String(value));
+              });
+          }, 4000);
         });
     }, 6000);
-    setTimeout(() => {
-      ctx.ui.dialog
-        .select({
-          title: "v21f paste",
-          options: [
-            { title: "Theme Light", value: "theme-light", category: "Palette" },
-            { title: "Terminal", value: "terminal", category: "Palette" },
-            { title: "Thermometer", value: "thermometer", category: "Palette" },
-            { title: "Almanac", value: "almanac", category: "Books" },
-          ],
-        })
-        .then((value) => {
-          report("sel " + String(value));
-        });
-    }, 96000);
     return () => {};
   },
 };
@@ -465,7 +472,9 @@ fn v21f_select_paste_pair() {
     let mut rig = v21f_rig("v21f-sel", "v21f-ed", ED_FIXTURE);
     boot_both(&mut rig);
     // The select opens (the prompt leg at t+6 s closes untouched —
-    // the rig rides the t+96 s select).
+    // the rig rides the chained select: va21g moved the phase from
+    // the t+96 s absolute timer to the prompt-settle chain, so it
+    // arrives ~4 s after the esc marker).
     let prompt_open = rig.wait_both_screens("v21f lines", 60);
     assert!(
         prompt_open,

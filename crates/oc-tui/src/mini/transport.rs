@@ -708,6 +708,26 @@ impl TransportState {
         Fold::Ignored
     }
 
+    /// `mergePending` (transport.ts:620-630): a prompt POST's response
+    /// echo (the optimistic admit's inbox info) merges into the
+    /// pending list keyed by the ITEM's id (`pendingPrompt(item)`,
+    /// transport.ts:196-208 — the real server echoes the POST's
+    /// client-minted message id); an already-promoted row renders as
+    /// the user echo instead (the delivered/dequeued fast path).
+    pub fn merge_pending(&mut self, item: &Value) -> Fold {
+        let id = text_field(item, "id");
+        if id.is_empty() || text_field(item, "type") != "user" {
+            return Fold::Ignored;
+        }
+        let prompt = queued_prompt(&id, item);
+        if self.promoted.contains(&prompt.message_id) {
+            return Fold::Commits(self.render_user_rows(&prompt));
+        }
+        self.pending.retain(|pending| pending.message_id != prompt.message_id);
+        self.pending.push(prompt);
+        Fold::Ignored
+    }
+
     /// `renderUser` (transport.ts:600-618 — the text subset): the
     /// skill rows, then the user text row — once per message (the
     /// `visible` guard). The delivery fold AND the replay walk share
@@ -1439,7 +1459,7 @@ pub async fn send_prompt(
     message_id: &str,
     text: &str,
     delivery: Option<&str>,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     send_prompt_parts(
         client,
         session_id,
@@ -1465,9 +1485,19 @@ pub async fn send_prompt_parts(
     session_id: &str,
     message_id: &str,
     prompt: &super::queue::RunPrompt,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
+    // G-543 — the response echo (the optimistic admit's inbox info,
+    // stream-v2.transport.ts:1600-1605's `const admitted = await
+    // send()`) rides back to the runtime: the ref merges it into the
+    // transport's pending map (`mergePending`, :620-630) so the
+    // `session.inbox.delivered` event renders the user row.
     let body = SessionPromptBody { id: Some(message_id.to_owned()), ..prepare_prompt_body(prompt) };
-    client.session().prompt(session_id, &body).await.map(|_| ()).map_err(|error| error.to_string())
+    client
+        .session()
+        .prompt(session_id, &body)
+        .await
+        .map(|info| serde_json::to_value(&info).unwrap_or(serde_json::Value::Null))
+        .map_err(|error| error.to_string())
 }
 
 /// G-272 — `runShellTurn`'s send half (stream-v2.transport.ts:

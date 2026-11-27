@@ -512,6 +512,17 @@ pub struct DialogEntry {
     /// band from offset 0 — the mount paint's computation with the
     /// seeded caret); every wholesale value write re-seeds it.
     pub prompt_viewport: Option<usize>,
+    /// G-542/G-546 — the prompt viewport's VERTICAL band (the height-1
+    /// textarea's visible row): the MOUNT paint shows the value's TOP
+    /// row (`createScrollbackSurface`'s offset-0 first paint — the
+    /// seeded caret's `gotoLineEnd()` does NOT re-band it,
+    /// dialog-prompt.tsx:72-80) and the band moves ONLY when the
+    /// caret CROSSES from inside the band's row to outside it
+    /// (`ensureCursorVisible`'s boundary-crossing scroll — a caret
+    /// that moves WITHIN the outside region never re-bands, the
+    /// v21f-ed prompt-up-1 observable). `None` = not yet materialized
+    /// (the mount paint: band row 0).
+    pub prompt_vband: Option<usize>,
     /// G-537 — the prompt's undo/redo history (the
     /// `TextareaRenderable`'s rope snapshots, index.bun.js:8801-8804's
     /// undo/redo actions + autoStoreUndo): one (value, cursor)
@@ -560,11 +571,15 @@ impl DialogEntry {
     /// past it.
     pub fn prompt_insert_char(&mut self, ch: char) {
         // G-537 — autoStoreUndo: the pre-edit state snapshots first.
+        let old_caret_line = self.prompt_caret_line();
         self.prompt_history.push(&self.value, self.prompt_cursor());
         let cursor = self.prompt_cursor();
         let byte = char_boundary(&self.value, cursor);
         self.value.insert(byte, ch);
         self.prompt_cursor = Some(cursor + 1);
+        // G-546 — the caret's row never moves on an insert, but the
+        // rule runs anyway (a merged-value edit could).
+        self.reband_after_caret_move(old_caret_line);
     }
 
     /// G-527 — delete the char BEFORE the cursor
@@ -574,6 +589,7 @@ impl DialogEntry {
         if cursor == 0 {
             return;
         }
+        let old_caret_line = self.prompt_caret_line();
         // G-537 — autoStoreUndo: the pre-edit state snapshots first
         // (only for a REAL deletion — the column-0 no-op stores
         // nothing).
@@ -581,6 +597,8 @@ impl DialogEntry {
         let byte = char_boundary(&self.value, cursor - 1);
         self.value.remove(byte);
         self.prompt_cursor = Some(cursor - 1);
+        // G-546 — a merged newline moves the caret's row.
+        self.reband_after_caret_move(old_caret_line);
     }
 
     /// G-527 — the caret's CELL column. G-532: the value can carry
@@ -609,19 +627,25 @@ impl DialogEntry {
         self.value[..byte].matches('\n').count()
     }
 
-    /// G-532 — the caret's line and the cursor's CHAR position within
-    /// it (the render's prompt row = this line, `prompt_input_chunks`
-    /// slices it with the horizontal viewport).
+    /// G-532/G-542/G-546 — the BAND's row and the cursor's CHAR
+    /// position within it: the height-1 textarea's vertical viewport
+    /// shows the BAND row (the mount paint = the value's TOP row; the
+    /// band moves only on an inside→outside caret crossing), NOT the
+    /// caret's line. The cursor cell renders only while the caret
+    /// SITS on the band's row (`None` while the caret is off-band —
+    /// the ref renders no cursor cell on a row the caret is not on).
     #[must_use]
-    pub fn prompt_visible_line(&self) -> (String, usize) {
-        let cursor = self.prompt_cursor();
-        let byte = char_boundary(&self.value, cursor);
-        let before = &self.value[..byte];
-        let line_start = before.rfind('\n').map_or(0, |pos| pos + 1);
-        let line_end = self.value[byte..].find('\n').map_or(self.value.len(), |off| byte + off);
-        let line = self.value[line_start..line_end].to_owned();
-        let cursor_in_line = self.value[line_start..byte].chars().count();
-        (line, cursor_in_line)
+    pub fn prompt_visible_line(&self) -> (String, Option<usize>) {
+        let band = self.prompt_vband.unwrap_or(0);
+        let line: String =
+            self.value.split('\n').nth(band).unwrap_or_default().to_owned();
+        let cursor = (self.prompt_caret_line() == band).then(|| {
+            let cursor = self.prompt_cursor();
+            let byte = char_boundary(&self.value, cursor);
+            let line_start = self.value[..byte].rfind('\n').map_or(0, |pos| pos + 1);
+            self.value[line_start..byte].chars().count()
+        });
+        (line, cursor)
     }
 
     /// G-532 — apply one engine edit command (the composer's
@@ -637,6 +661,7 @@ impl DialogEntry {
     /// core has no rope history to pop).
     pub fn prompt_apply_edit(&mut self, command: oc_tui_core::text_edit::EditCommand) {
         use oc_tui_core::text_edit::{EditCommand, EditCore, EditOutcome, SnapshotKind};
+        let old_caret_line = self.prompt_caret_line();
         match command {
             EditCommand::Undo => {
                 // `undo()`: restore the last snapshot onto the redo
@@ -669,6 +694,9 @@ impl DialogEntry {
                 self.prompt_cursor = Some(edit.caret());
             }
         }
+        // G-546 — the caret's move crosses the band boundary per the
+        // transition rule (the undo/redo restores can jump rows).
+        self.reband_after_caret_move(old_caret_line);
     }
 
     /// G-533 — insert pasted text AT the caret (the ref's
@@ -682,12 +710,15 @@ impl DialogEntry {
             return;
         }
         self.prompt_history.push(&self.value, self.prompt_cursor());
+        let old_caret_line = self.prompt_caret_line();
         let mut edit = EditCore::fresh();
         edit.set_text(&self.value);
         edit.set_caret(self.prompt_cursor());
         let _ = edit.insert_tracked(text);
         self.value = edit.text();
         self.prompt_cursor = Some(edit.caret());
+        // G-546 — a multi-line payload moves the caret across rows.
+        self.reband_after_caret_move(old_caret_line);
     }
 
     /// G-537 — a wholesale value write (v2's `setText`): the history
@@ -698,6 +729,7 @@ impl DialogEntry {
         self.value = value;
         self.prompt_cursor = None;
         self.prompt_viewport = None;
+        self.prompt_vband = None;
         self.prompt_history.undo.clear();
         self.prompt_history.redo.clear();
     }
@@ -705,10 +737,18 @@ impl DialogEntry {
     /// G-527 — materialize the viewport BEFORE the first edit (the
     /// ref's mount paint: the band from offset 0 with the seeded
     /// caret). A no-op once materialized.
+    /// G-542 — the VERTICAL band materializes as the value's TOP row
+    /// (the mount's offset-0 first paint — the seeded caret's
+    /// `gotoLineEnd()` does NOT re-band it, dialog-prompt.tsx:72-80:
+    /// `ensureCursorVisible` with height 1 would snap to the caret's
+    /// row, and the ref's first paint renders the value's FIRST row).
     pub fn prompt_materialize_viewport(&mut self, width: usize) {
         if self.prompt_viewport.is_none() {
             let cursor_col = self.prompt_cursor_col();
             self.prompt_viewport = Some(band_offset(0, cursor_col, width));
+        }
+        if self.prompt_vband.is_none() {
+            self.prompt_vband = Some(0);
         }
     }
 
@@ -719,6 +759,22 @@ impl DialogEntry {
         let vp = self.prompt_viewport.unwrap_or(0);
         let cursor_col = self.prompt_cursor_col();
         self.prompt_viewport = Some(band_offset(vp, cursor_col, width));
+    }
+
+    /// G-546 — the VERTICAL band's transition rule after a caret move:
+    /// the height-1 viewport moves ONLY when the caret CROSSES from
+    /// inside the band's row to outside it (`ensureCursorVisible`
+    /// fires on the boundary crossing; a caret that moves WITHIN the
+    /// outside region never re-bands — the v21f-ed prompt-up-1
+    /// observable: the caret climbed from the seeded end to the
+    /// middle row and the ref's input row STAYED at the mount's top
+    /// line).
+    fn reband_after_caret_move(&mut self, old_caret_line: usize) {
+        let band = self.prompt_vband.unwrap_or(0);
+        let new_caret_line = self.prompt_caret_line();
+        if old_caret_line == band && new_caret_line != band {
+            self.prompt_vband = Some(new_caret_line);
+        }
     }
 
     /// G-527 — the RESOLVED viewport offset for rendering: the stored
@@ -9659,6 +9715,7 @@ impl Store {
                 // G-527 — the seeded rename value: cursor at the end.
                 top.prompt_cursor = None;
                 top.prompt_viewport = None;
+                top.prompt_vband = None;
             });
         } else {
             self.update_dialog(|top| {
@@ -9985,6 +10042,7 @@ impl Store {
             // G-527 — the seeded rename value: cursor at the end.
             top.prompt_cursor = None;
             top.prompt_viewport = None;
+            top.prompt_vband = None;
         });
     }
 
@@ -11638,6 +11696,7 @@ impl Store {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
+            prompt_vband: None,
             prompt_history: DialogPromptHistory::default(),
             theme_initial,
         };
@@ -11678,6 +11737,7 @@ impl Store {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
+            prompt_vband: None,
             prompt_history: DialogPromptHistory::default(),
             theme_initial,
         };
@@ -11711,6 +11771,7 @@ impl Store {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
+            prompt_vband: None,
             prompt_history: DialogPromptHistory::default(),
             theme_initial,
         };
@@ -12468,6 +12529,7 @@ impl Store {
                 // viewport re-materializes from the new seed.
                 top.prompt_cursor = None;
                 top.prompt_viewport = None;
+                top.prompt_vband = None;
             });
         }
         self.request_redraw();
@@ -12946,6 +13008,7 @@ impl Store {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
+            prompt_vband: None,
             prompt_history: DialogPromptHistory::default(),
             theme_initial,
         };
@@ -13044,6 +13107,7 @@ impl Store {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
+            prompt_vband: None,
             prompt_history: DialogPromptHistory::default(),
             theme_initial,
         };
