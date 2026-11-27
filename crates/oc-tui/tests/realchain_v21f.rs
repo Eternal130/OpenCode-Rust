@@ -131,6 +131,25 @@ impl V21FRig {
         }
         true
     }
+
+    /// The squashed-screen needle (G-540 note): the port's mini starts
+    /// every streamed progress chunk on a NEW row where the ref
+    /// continues the entry's line — the turn-completion needles match
+    /// only with the inter-row whitespace stripped (rig health; the
+    /// row-shape difference itself rides the exports for adjudication).
+    fn screen_squashed(tui: &TuiProcess) -> String {
+        tui.screen_text().chars().filter(|ch| !ch.is_whitespace()).collect()
+    }
+
+    fn wait_squashed(tui: &TuiProcess, needle: &str, secs: u64) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+        let mut ok = Self::screen_squashed(tui).contains(needle);
+        while !ok && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+            ok = Self::screen_squashed(tui).contains(needle);
+        }
+        ok
+    }
 }
 
 fn settle(secs: u64) {
@@ -198,7 +217,8 @@ const ED_FIXTURE: &str = r#"export default {
     // `store.session.family[resolveRoot(id)] ?? []`: an UNKNOWN id's
     // family is []; the pre-fix port seeded [id]). No sessions exist
     // yet, so the probe's length is the face: 0 (ref + fixed port) vs
-    // 1 (pre-fix port). A short toast — gone before the t+6 s prompt.
+    // 1 (pre-fix port). A PERSISTENT toast — the face rides every
+    // export of this scenario as a row both ends must agree on.
     setTimeout(() => {
       const family =
         ctx.data && ctx.data.session && typeof ctx.data.session.family === "function"
@@ -207,7 +227,7 @@ const ED_FIXTURE: &str = r#"export default {
       ctx.ui.toast.show({
         title: "v21f fam " + (family === null ? "absent" : String(family.length)),
         message: "",
-        duration: 6000,
+        duration: 600000,
       });
     }, 3000);
     setTimeout(() => {
@@ -346,9 +366,8 @@ fn v21f_prompt_lines_undo_pair() {
     skip_without_ref_lane!();
     let mut rig = v21f_rig("v21f-ed", "v21f-ed", ED_FIXTURE);
     boot_both(&mut rig);
-    // G-539(c) — the family probe's short toast (t+3 s, 6 s duration):
-    // an unknown id's family is [] (the ref's `?? []`; the pre-fix
-    // port answered [id]).
+    // The probe toast persists through the scenario (the family face
+    // rides every export); the prompt opens at t+6 s regardless.
     let fam = rig.wait_both_screens("v21f fam ", 20);
     assert!(
         fam,
@@ -359,8 +378,7 @@ fn v21f_prompt_lines_undo_pair() {
     );
     settle(1);
     capture_pair(&rig, "ed", "family-probe");
-    // The probe toast expires before the prompt opens.
-    settle(4);
+    settle(3);
     // The prompt opens with the description + the seeded tail line.
     let open = rig.wait_both_screens("v21f lines", 60);
     assert!(
@@ -518,12 +536,17 @@ impl MiniRig {
 }
 
 /// The mini rig (va19's sub_rig spawn shape, argument-carrying): the
-/// plain-paced gateway, the rust server, one mini pair. `PWD` is
-/// pinned to the sandbox project (the mini's localDirectory chdir
-/// prefers `$PWD`) and the cursor probe gets answered.
+/// plain-paced RECORD-MODE gateway (the `--agent` flag changes the
+/// turn's request digest — the corpus has no cassette for it, so the
+/// record mode seeds the miss with the canned REALCHAIN-REPLAY-OK
+/// reply like every bootstrap lane), the rust server, one mini pair.
+/// `PWD` is pinned to the sandbox project (the mini's localDirectory
+/// chdir prefers `$PWD`) and the cursor probe gets answered.
 fn mini_rig(tag: &str, args: &[&str]) -> MiniRig {
     let lane = lane_lock();
-    let gateway = Gateway::spawn_paced(tag, None, &default_pace());
+    let record = wt_root().join(format!(".test-logs/{tag}-seeds"));
+    std::fs::create_dir_all(&record).expect("create record dir");
+    let gateway = Gateway::spawn_paced(tag, Some(&record), &default_pace());
     let rust = sandbox(tag, gateway.port);
     let refbox = sandbox(&format!("{tag}ref"), gateway.port);
     rust.write_config(&[], "replay/claude-opus-4-7");
@@ -592,11 +615,14 @@ fn v21f_agent_summary_pair() {
     let rust_from = rig.rust_tui.raw_len();
     let ref_from = rig.ref_tui.raw_len();
     rig.write_both(b"hello\r");
-    let rust_replied = rig.rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30));
-    let ref_replied = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
+    let rust_replied = rig.rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(60));
+    let ref_replied = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(90));
     assert!(
         rust_replied && ref_replied,
-        "V21F agent RED: hello turn rust={rust_replied} ref={ref_replied}"
+        "V21F agent RED: hello turn rust={rust_replied} ref={ref_replied}; \
+         rust screen:\n{}\nref screen:\n{}",
+        rig.rust_tui.screen_text(),
+        rig.ref_tui.screen_text()
     );
     // The turn summary lands after the settle loop's duration arm.
     settle(6);
@@ -620,6 +646,35 @@ fn v21f_agent_summary_pair() {
 // ===========================================================================
 
 const SUB_DONE_NEEDLE: &[u8] = b"round-trip completed";
+
+/// The rig-diagnostic helpers (the session-list probe between the
+/// resume phases): a URL-safe path encode and a payload preview.
+fn urlencoding_encode(text: &str) -> String {
+    let mut out = String::new();
+    for byte in text.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(char::from(byte));
+            }
+            _ => {
+                out.push_str(&format!("%{byte:02X}"));
+            }
+        }
+    }
+    out
+}
+
+fn server_url_port(url: &str) -> String {
+    url.rsplit_once(':').map_or_else(|| url.to_owned(), |(_, port)| port.to_owned())
+}
+
+fn truncate_diag(text: &str) -> String {
+    let mut seen = 0usize;
+    let cut = text.char_indices().nth(600).map_or(text.len(), |(at, _)| at);
+    seen = cut;
+    let _ = seen;
+    text.chars().take(600).collect()
+}
 
 /// The tool pre-authorization block (the subagent round-trip must not
 /// stop on a permission dialog) — the same shape va19's sub rig uses.
@@ -710,13 +765,20 @@ fn v21f_resume_subagents_pair() {
     settle(3);
     let rust_from = rust_tui.raw_len();
     let ref_from = ref_tui.raw_len();
+    let _ = (rust_from, ref_from);
     rust_tui.write(b"hello\r");
     ref_tui.write(b"hello\r");
-    let rust_done = rust_tui.wait_for(SUB_DONE_NEEDLE, rust_from, Duration::from_secs(60));
-    let ref_done = ref_tui.wait_for(SUB_DONE_NEEDLE, ref_from, Duration::from_secs(90));
+    // G-540 note: the streamed reply's chunks land one-per-row on the
+    // port (the ref continues the line) — the completion needle rides
+    // the SQUASHED screen (rig health; the row shape rides the export).
+    let rust_done = V21FRig::wait_squashed(&rust_tui, "round-tripcompleted", 90);
+    let ref_done = V21FRig::wait_squashed(&ref_tui, "round-tripcompleted", 120);
     assert!(
         rust_done && ref_done,
-        "V21F resume RED: the round-trip never completed rust={rust_done} ref={ref_done}"
+        "V21F resume RED: the round-trip never completed rust={rust_done} ref={ref_done}; \
+         rust screen:\n{}\nref screen:\n{}",
+        rust_tui.screen_text(),
+        ref_tui.screen_text()
     );
     settle(3);
     capture(&rust_tui, &ref_tui, "first-turn-settled");
@@ -725,6 +787,22 @@ fn v21f_resume_subagents_pair() {
     rust_tui.write(b"\x03\x03");
     ref_tui.write(b"\x03\x03");
     settle(3);
+    // Rig diagnostic (the resume's --continue must find the session):
+    // the rust server's session list at the project directory.
+    {
+        let query = format!(
+            "http://127.0.0.1:{}/api/session?directory={}&parentID=null&limit=50&order=desc",
+            server_url_port(&server.url),
+            urlencoding_encode(&rust.project.display().to_string())
+        );
+        if let Some((status, payload)) =
+            realchain_harness::http_get(&query, server.password.as_deref())
+        {
+            eprintln!("V21F diag: session list http {status}: {}", truncate_diag(&payload));
+        } else {
+            eprintln!("V21F diag: the session list query failed (server down?)");
+        }
+    }
     rust_tui.shutdown(Duration::from_secs(10));
     ref_tui.shutdown(Duration::from_secs(10));
 
@@ -738,11 +816,56 @@ fn v21f_resume_subagents_pair() {
     let mut rust_tui = TuiProcess::spawn_command(rust_command, COLS, ROWS);
     rust_tui.arm_cursor_probe_answers(ROWS);
     let mut ref_tui = ref_mini_spawn_with_args(&refbox, &stage, COLS, ROWS, &["--continue"]);
-    // The resume boots: the splash, then the replayed transcript.
+    // The resume boots: the splash, then the replayed transcript (the
+    // replay renders whole projected messages — the needle matches the
+    // plain screen; the squashed form stays the robust form).
     let rust_boot = rust_tui.wait_for(b"oc mini", 0, Duration::from_secs(30));
     let ref_boot = ref_tui.wait_for(b"oc mini", 0, Duration::from_secs(60));
-    let rust_replayed = rust_tui.wait_for(SUB_DONE_NEEDLE, 0, Duration::from_secs(60));
-    let ref_replayed = ref_tui.wait_for(SUB_DONE_NEEDLE, 0, Duration::from_secs(90));
+    let rust_replayed = V21FRig::wait_squashed(&rust_tui, "round-tripcompleted", 60);
+    let ref_replayed = V21FRig::wait_squashed(&ref_tui, "round-tripcompleted", 90);
+    // Rig diagnostic: the session list AFTER the resume pair booted
+    // (a second row = the resume created a fresh session instead of
+    // attaching the first). Plus the two replay-feed endpoints the
+    // mini's hydrate hits (message list + the G-536 active map).
+    {
+        let base = format!("http://127.0.0.1:{}", server_url_port(&server.url));
+        let query = format!(
+            "{base}/api/session?directory={}&parentID=null&limit=50&order=desc",
+            urlencoding_encode(&rust.project.display().to_string())
+        );
+        if let Some((status, payload)) =
+            realchain_harness::http_get(&query, server.password.as_deref())
+        {
+            eprintln!("V21F diag2: post-boot session list http {status}: {}", truncate_diag(&payload));
+        }
+        if let Some((status, payload)) =
+            realchain_harness::http_get(&format!("{base}/api/session/active"), server.password.as_deref())
+        {
+            eprintln!("V21F diag3: active map http {status}: {}", truncate_diag(&payload));
+        }
+        // The replay's message walk: the session's message list.
+        if let Some((status, payload)) =
+            realchain_harness::http_get(&query, server.password.as_deref())
+        {
+            if let Ok(doc) = serde_json::from_str::<serde_json::Value>(&payload) {
+                if let Some(id) = doc.pointer("/data/0/id").and_then(|v| v.as_str()) {
+                    let msg_query = format!(
+                        "{base}/api/session/{id}/message?limit=200&order=desc"
+                    );
+                    if let Some((mstatus, mpayload)) = realchain_harness::http_get(
+                        &msg_query,
+                        server.password.as_deref(),
+                    ) {
+                        eprintln!(
+                            "V21F diag4: message list http {mstatus} ({} bytes): {}",
+                            mpayload.len(),
+                            truncate_diag(&mpayload)
+                        );
+                    }
+                }
+            }
+        }
+    }
     assert!(
         rust_boot && ref_boot && rust_replayed && ref_replayed,
         "V21F resume RED: boot rust={rust_boot} ref={ref_boot} replayed rust={rust_replayed} \

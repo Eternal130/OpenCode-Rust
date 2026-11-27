@@ -1420,13 +1420,22 @@ async fn replay_history(
     messages.reverse();
     for (index, message) in messages.iter().enumerate() {
         let Ok(value) = serde_json::to_value(message) else { continue };
+        // G-541 — the wire message rows carry their parts under
+        // `content` (the projected message shape, `message.list` — the
+        // ref's renderMessage reads `message.content`,
+        // stream-v2.transport.ts:845-849; `projectedMessages` hands
+        // the rows through verbatim, :901-907). The pre-fix port read
+        // a nonexistent `parts` field — the whole replay walk was
+        // dead against the real wire (only unit fixtures in the SSE
+        // event shape ever exercised it).
+        let content = value.get("content").and_then(Value::as_array);
         // G-529 — the hydrate's `mainTool` walk (stream-v2.subagent.
         // ts:1038-1043): every PROJECTED subagent tool part admits its
         // child + applies the tool input's agent/description (the
         // UNCONDITIONAL :286 site). Runs BEFORE the commit projection
         // so a same-event snapshot stays coherent.
-        if value.get("role").and_then(Value::as_str) == Some("assistant") {
-            if let Some(parts) = value.get("parts").and_then(Value::as_array) {
+        if value.get("type").and_then(Value::as_str) == Some("assistant") {
+            if let Some(parts) = content {
                 for part in parts {
                     if part.get("type").and_then(Value::as_str) == Some("tool") {
                         subagents.fold_tool_part(part, active.as_ref());
@@ -1585,7 +1594,11 @@ fn replay_message_commits(
         value.get(key).and_then(Value::as_str).unwrap_or_default().to_owned()
     }
     let mut commits = Vec::new();
-    let parts = value.get("parts").and_then(Value::as_array).cloned().unwrap_or_default();
+    // G-541 — the wire rows' parts live under `content` (the ref's
+    // `message.content` reads, stream-v2.transport.ts:845-849; the
+    // pre-fix port read a nonexistent `parts` field — the replay walk
+    // produced zero commits against the real wire).
+    let parts = value.get("content").and_then(Value::as_array).cloned().unwrap_or_default();
     let kind = value.get("type").and_then(Value::as_str).unwrap_or_default();
     let role = value.get("role").and_then(Value::as_str).unwrap_or_default();
     let message_id = value
@@ -2228,7 +2241,7 @@ mod tests {
         // A user message with an image file: text row + image commit.
         let user = serde_json::json!({
             "id": "msg_u1", "type": "user",
-            "parts": [{ "type": "text", "text": "look" }],
+            "content": [{ "type": "text", "text": "look" }],
             "files": [{ "mime": "image/png", "data": "AAEC", "name": "shot.png" }],
         });
         let commits = replay_message_commits(&user, 0, &mut transport, &settings);
@@ -2240,7 +2253,7 @@ mod tests {
         // tools in the message) with the `text:0` part id.
         let assistant = serde_json::json!({
             "id": "msg_a1", "type": "assistant",
-            "parts": [
+            "content": [
                 { "type": "reasoning", "text": "hmm" },
                 { "type": "text", "text": "one two three" },
             ],
@@ -2288,7 +2301,7 @@ mod tests {
         // Tool), and replays dedup.
         let tool = serde_json::json!({
             "id": "msg_a2", "type": "assistant",
-            "parts": [
+            "content": [
                 { "type": "text", "text": "here" },
                 { "type": "tool", "id": "9", "state": { "content": [
                     { "type": "file", "mime": "image/png", "uri": "data:image/png;base64,AAEC", "name": "out.png" },
