@@ -1992,7 +1992,6 @@ pub(crate) fn plugin_lane_skip_reason_at(root: &Path) -> Option<String> {
     None
 }
 
-
 /// The newest `<stamp>` generation under a payload registry entry that
 /// carries `node_modules` (the install layout both engines share).
 fn plugin_payload_stamp(source: &Path) -> Option<PathBuf> {
@@ -2206,6 +2205,7 @@ pub fn quiescence_names() -> Vec<String> {
 ///     faster than the flip window — animation, not new content;
 ///     the caret's 500 ms half-period toggles two seen values —
 ///     neither blocks the window.
+///
 /// A paced stream's content chunks land NOVEL values on transcript
 /// cells at every chunk (25-150 ms apart) — the window keeps
 /// re-arming for as long as content lands, so a mid-stream capture
@@ -2265,8 +2265,9 @@ pub fn capture_settled(tui: &TuiProcess) -> String {
                 }
                 for (col, (a, b)) in prev.iter().zip(cur.iter()).enumerate() {
                     if a != b {
-                        let (seen, last_change) =
-                            tracker.entry((row, col)).or_insert((std::collections::BTreeSet::new(), 0));
+                        let (seen, last_change) = tracker
+                            .entry((row, col))
+                            .or_insert((std::collections::BTreeSet::new(), 0));
                         let novel = seen.insert(*b);
                         let fast = *last_change > 0 && polls - *last_change <= TRANSIENT_POLLS;
                         *last_change = polls;
@@ -2927,5 +2928,3 @@ fn write_diff_report(
     }
     let _ = std::fs::write(dir.join(format!("{base}.txt")), text);
 }
-
-

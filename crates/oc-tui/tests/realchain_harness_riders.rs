@@ -35,12 +35,13 @@ mod slowe_rider_tests {
     /// 300 ms — the shape of the run loop's 100 ms render tick while
     /// the composer caret is live) over a TEXT grid that never
     /// changes. The retired stream-quiet gate burned its full 10 s cap
-    /// on exactly this shape (slowB's ["settled","capped"] evidence);
+    /// on exactly this shape (slowB's settled/capped evidence);
     /// the grid-stability arm must certify it as settled, on the
     /// stable grid, well inside the cap.
     #[test]
     fn blink_noise_stream_settles_on_stable_grid() {
-        let script = "printf 'stable-grid\\r\\n'; while true; do printf '\\033[?25l'; sleep 0.3; done";
+        let script =
+            "printf 'stable-grid\\r\\n'; while true; do printf '\\033[?25l'; sleep 0.3; done";
         let mut command = std::process::Command::new("sh");
         command.arg("-c").arg(script);
         let mut proc = TuiProcess::spawn_command(command, 40, 10);
@@ -53,10 +54,7 @@ mod slowe_rider_tests {
             ["settled".to_owned()],
             "the chatter-over-stable-grid stream must certify settled, not cap"
         );
-        assert!(
-            grid.contains("stable-grid"),
-            "the certified grid is the stable one: {grid:?}"
-        );
+        assert!(grid.contains("stable-grid"), "the certified grid is the stable one: {grid:?}");
         assert!(
             elapsed < Duration::from_secs(6),
             "the settle must not burn the 10 s cap (took {elapsed:?})"
@@ -112,10 +110,16 @@ mod slowe_rider_tests {
         rust_leg.write(b"rust-tail");
         let (ref_grid, rust_grid) = capture_settled_pair(&ref_leg, &rust_leg);
         let verdict = quiescence_names();
-        assert_eq!(verdict, ["settled".to_owned(), "settled".to_owned()],
-            "both legs' remarks must land on the calling thread, in leg order");
+        assert_eq!(
+            verdict,
+            ["settled".to_owned(), "settled".to_owned()],
+            "both legs' remarks must land on the calling thread, in leg order"
+        );
         assert!(ref_grid.contains("ref-tail"), "the first tuple slot is the ref leg: {ref_grid:?}");
-        assert!(rust_grid.contains("rust-tail"), "the second tuple slot is the rust leg: {rust_grid:?}");
+        assert!(
+            rust_grid.contains("rust-tail"),
+            "the second tuple slot is the rust leg: {rust_grid:?}"
+        );
         ref_leg.shutdown(Duration::from_secs(2));
         rust_leg.shutdown(Duration::from_secs(2));
     }
@@ -163,7 +167,6 @@ mod slowe_rider_tests {
 #[cfg(test)]
 mod rider_payload_root_tests {
     use crate::realchain_harness::*;
-    use std::path::Path;
 
     /// Rider (Lane D pitfall) — the git-ignored payload registry lives
     /// only in the main checkout: in a lane worktree the local path is
@@ -464,4 +467,3 @@ mod w4_normalizer_tests {
         assert_eq!(replace_version_pill("savedvlocal row"), "savedvlocal row");
     }
 }
-
