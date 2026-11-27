@@ -2153,7 +2153,8 @@ impl Lifecycle {
     /// keeps the plain writer (the ref's `mono.ts` gate); styled
     /// commits carry theme colors + syntax highlight through the
     /// styled seam.
-    pub fn append(&mut self, commit: Commit) {        let rows = append_rows(
+    pub fn append(&mut self, commit: Commit) {
+        let rows = append_rows(
             self.mono,
             self.last_commit.as_ref(),
             &commit,

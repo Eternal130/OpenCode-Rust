@@ -675,11 +675,7 @@ fn ui_dialog_prompt_line_moves_and_undo_redo() {
         "undo restored the line"
     );
     assert_eq!(dialog_layer(&store, "ctrl+."), DialogKeyOutcome::Consumed);
-    assert_eq!(
-        store.top_dialog().expect("open").value,
-        "alpha line\n",
-        "redo re-deleted the line"
-    );
+    assert_eq!(store.top_dialog().expect("open").value, "alpha line\n", "redo re-deleted the line");
     assert_eq!(dialog_layer(&store, "super+z"), DialogKeyOutcome::Consumed);
     assert_eq!(
         store.top_dialog().expect("open").value,
@@ -698,11 +694,7 @@ fn ui_dialog_prompt_line_moves_and_undo_redo() {
     // and an empty-stack undo is a consumed no-op.
     assert_eq!(dialog_layer(&store, "end"), DialogKeyOutcome::Consumed);
     dialog_layer(&store, "z");
-    assert_eq!(
-        store.top_dialog().expect("open").value,
-        "alpha line\nz",
-        "the typed char"
-    );
+    assert_eq!(store.top_dialog().expect("open").value, "alpha line\nz", "the typed char");
     assert_eq!(dialog_layer(&store, "super+z"), DialogKeyOutcome::Consumed);
     assert_eq!(
         store.top_dialog().expect("open").value,
@@ -778,10 +770,7 @@ fn ui_select_takes_the_terminal_paste() {
     let entry = app.store.top_dialog().expect("open");
     assert_eq!(entry.select.filter, "the", "the paste landed in the filter, sanitized");
     let composer = app.store.composer(oc_tui::app::HOME_PROMPT_KEY);
-    assert_eq!(
-        composer.draft.text, "",
-        "the composer behind the modal never saw the paste"
-    );
+    assert_eq!(composer.draft.text, "", "the composer behind the modal never saw the paste");
     // A second paste APPENDS (the InputRenderable's caret-at-end
     // model — the port's typing face).
     app.paste_terminal_text("me");

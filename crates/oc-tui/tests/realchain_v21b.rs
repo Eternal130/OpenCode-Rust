@@ -389,11 +389,7 @@ export default {
         message: "v21b plain same-family",
         duration: 600000,
       });
-      // 2026-11-27 slow-audit fix B: the 40s hold was pure padding (the toast's
-      // display is already needle-confirmed on BOTH ends; duration 600000
-      // means nothing expires during the hold) — 5s covers the pre-navigate
-      // quiescence the hold was actually buying.
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, 40000));
       try {
         ctx.ui.router.navigate({ type: "home" });
       } catch {}
@@ -479,11 +475,7 @@ export default {
         message: parts.join(" ; "),
         duration: 600000,
       });
-      // 2026-11-27 slow-audit fix B: the 40s hold was pure padding (the toast's
-      // display is already needle-confirmed on BOTH ends; duration 600000
-      // means nothing expires during the hold) — 5s covers the pre-navigate
-      // quiescence the hold was actually buying.
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, 40000));
       try {
         ctx.ui.router.navigate({ type: "home" });
       } catch {}
@@ -560,11 +552,7 @@ export default {
         message: current,
         duration: 600000,
       });
-      // 2026-11-27 slow-audit fix B: the 40s hold was pure padding (the toast's
-      // display is already needle-confirmed on BOTH ends; duration 600000
-      // means nothing expires during the hold) — 5s covers the pre-navigate
-      // quiescence the hold was actually buying.
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, 40000));
       try {
         ctx.ui.router.navigate({ type: "plugin", name: "v21b-route", data: { k: 1 } });
       } catch {}

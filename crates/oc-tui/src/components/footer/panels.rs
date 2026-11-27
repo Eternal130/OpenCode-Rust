@@ -22,8 +22,7 @@ pub use super::state::{
     agent_entries, apply_mini_setting_change, command_menu_entries, current_agent_label,
     fuzzy_matches, match_mini_verbosity, model_entries, resolve_mini_settings, reveal_current,
     settings_entries, variant_entries, verbosity_change, verbosity_label, MiniSettingChange,
-    MiniSettings, RunAgent,
-    RunModel, RunProvider, WORK_SPINNERS,
+    MiniSettings, RunAgent, RunModel, RunProvider, WORK_SPINNERS,
 };
 
 // -- panel renders ---------------------------------------------------------------
@@ -400,11 +399,7 @@ mod tests {
             "Secret",
             "a hidden id never resolves → the titlecase fallback"
         );
-        assert_eq!(
-            current_agent_label(&[], None),
-            "Default",
-            "no id + an empty catalog → Default"
-        );
+        assert_eq!(current_agent_label(&[], None), "Default", "no id + an empty catalog → Default");
     }
 
     #[test]

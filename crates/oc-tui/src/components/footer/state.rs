@@ -1834,16 +1834,14 @@ pub fn agent_entries(agents: &[RunAgent], current: Option<&str>) -> Vec<FooterMe
 /// `switchAgent` transport keep the raw id.
 #[must_use]
 pub fn current_agent_label(agents: &[RunAgent], selected: Option<&str>) -> String {
-    let selectable =
-        || agents.iter().filter(|agent| agent.mode != "subagent" && !agent.hidden);
+    let selectable = || agents.iter().filter(|agent| agent.mode != "subagent" && !agent.hidden);
     match selected {
         None => {
             selectable().next().map_or_else(|| "Default".to_owned(), |agent| agent.name.clone())
         }
-        Some(id) => selectable().find(|agent| agent.id == id).map_or_else(
-            || crate::components::message::titlecase(id),
-            |agent| agent.name.clone(),
-        ),
+        Some(id) => selectable()
+            .find(|agent| agent.id == id)
+            .map_or_else(|| crate::components::message::titlecase(id), |agent| agent.name.clone()),
     }
 }
 

@@ -1767,10 +1767,7 @@ impl SubagentTracker {
         // subagent.ts:184-190): the metadata `status` field, only
         // "running"/"completed" carry one (`_ => None` mirrors the
         // guard at :188).
-        let found_running = match part
-            .pointer("/state/metadata/status")
-            .and_then(Value::as_str)
-        {
+        let found_running = match part.pointer("/state/metadata/status").and_then(Value::as_str) {
             Some("running") => Some(true),
             Some("completed") => Some(false),
             _ => None,
@@ -1779,8 +1776,8 @@ impl SubagentTracker {
             if let Some(slot) = self.slots.iter_mut().find(|slot| slot.child.session_id == child_id)
             {
                 if slot.child.status == SubagentStatus::Running {
-                    let running = metadata_running
-                        && active.is_none_or(|map| map.contains_key(&child_id));
+                    let running =
+                        metadata_running && active.is_none_or(|map| map.contains_key(&child_id));
                     slot.child.status =
                         if running { SubagentStatus::Running } else { SubagentStatus::Completed };
                     fold.changed = true;
@@ -3081,13 +3078,16 @@ mod tests {
     fn tracker_hydrate_walks_update_labels_and_fill_titles() {
         let mut tracker = SubagentTracker::new("parent");
         // mainTool — the replayed tool part.
-        let fold = tracker.fold_tool_part(&json!({
-            "type": "tool",
-            "state": {
-                "metadata": { "sessionID": "child_4" },
-                "input": { "agent": "refactor", "description": "desc" },
-            },
-        }), None);
+        let fold = tracker.fold_tool_part(
+            &json!({
+                "type": "tool",
+                "state": {
+                    "metadata": { "sessionID": "child_4" },
+                    "input": { "agent": "refactor", "description": "desc" },
+                },
+            }),
+            None,
+        );
         assert!(fold.changed);
         assert_eq!(tracker_child(&tracker, "child_4").label, "Refactor");
         // The family row — a fallback-guarded label + a title fill.
@@ -3118,8 +3118,7 @@ mod tests {
     /// child.
     #[test]
     fn tracker_tool_part_metadata_status_arm() {
-        let empty: std::collections::BTreeMap<String, Value> =
-            std::collections::BTreeMap::new();
+        let empty: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
         let active: std::collections::BTreeMap<String, Value> =
             [("child_6".to_owned(), Value::Bool(true))].into_iter().collect();
         // (a) metadata "completed" → settles (the map is irrelevant).
@@ -3233,10 +3232,7 @@ mod tests {
         }
         let active: std::collections::BTreeMap<String, Value> =
             [("child_8".to_owned(), Value::Bool(true))].into_iter().collect();
-        assert!(
-            tracker.settle_against_active(&active),
-            "child_9 settled (not in the map)"
-        );
+        assert!(tracker.settle_against_active(&active), "child_9 settled (not in the map)");
         assert_eq!(
             tracker_child(&tracker, "child_8").status,
             SubagentStatus::Running,

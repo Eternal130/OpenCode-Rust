@@ -200,10 +200,10 @@ fn prompt_style_kind(store: &Store, kind: &DialogKind) -> bool {
 
 /// The select-pipeline dialog kinds (the typing/filter walk's gate —
 /// the prompt-style inputs and the custom-key families take their own
-/// arms). G-487: DialogExportOptions is a CUSTOM form; F15: the pair
+/// arms). G-487: `DialogExportOptions` is a CUSTOM form; F15: the pair
 /// dialog is custom-static. A rows-only plugin dialog is static (like
 /// help); the rest — the palette, theme list, server lists, worktrees,
-/// the queued-prompts manager (v2's DialogSelect) — are selects.
+/// the queued-prompts manager (v2's `DialogSelect`) — are selects.
 fn select_pipeline_kind(store: &Store, kind: &DialogKind) -> bool {
     match kind {
         DialogKind::SessionRename { .. }
@@ -267,7 +267,7 @@ fn select_pipeline_kind(store: &Store, kind: &DialogKind) -> bool {
 }
 
 /// G-538 — route a terminal paste into the FOCUSED select's filter
-/// (the ref's paste-to-focused-renderable: a DialogSelect focuses its
+/// (the ref's paste-to-focused-renderable: a `DialogSelect` focuses its
 /// filter `<input>` — an `InputRenderable`, dialog-select.tsx:699-707
 /// `setTimeout(() => r.focus(), 1)` — whose `handlePaste` inserts the
 /// ANSI + newline-stripped text, index.bun.js:9115-9119; the list
@@ -283,8 +283,8 @@ pub fn paste_into_dialog_select(store: &Store, text: &str, terminal: (u16, u16))
         return false;
     }
     let props = select_props_for_entry(&entry, store);
-    let is_static = matches!(entry.kind, DialogKind::Help)
-        || !select_pipeline_kind(store, &entry.kind);
+    let is_static =
+        matches!(entry.kind, DialogKind::Help) || !select_pipeline_kind(store, &entry.kind);
     if is_static || !props.render_filter {
         return false;
     }

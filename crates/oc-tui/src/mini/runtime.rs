@@ -1543,10 +1543,8 @@ async fn hydrate_blockers(
     // Bind the API handles (the futures must outlive the builders).
     let session = client.session();
     let forms_api = session.form();
-    let (permissions, forms) = tokio::join!(
-        session.permission_list(session_id),
-        forms_api.list(session_id),
-    );
+    let (permissions, forms) =
+        tokio::join!(session.permission_list(session_id), forms_api.list(session_id),);
     if let Ok(permissions) = permissions {
         for wire in &permissions {
             // The wire row IS the footer request shape (sessionID/

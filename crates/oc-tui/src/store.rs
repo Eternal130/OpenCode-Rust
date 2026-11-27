@@ -642,9 +642,7 @@ impl DialogEntry {
                 // `undo()`: restore the last snapshot onto the redo
                 // stack; an empty stack is a no-op.
                 if let Some((value, cursor)) = self.prompt_history.undo.pop() {
-                    self.prompt_history
-                        .redo
-                        .push((self.value.clone(), self.prompt_cursor()));
+                    self.prompt_history.redo.push((self.value.clone(), self.prompt_cursor()));
                     self.value = value;
                     self.prompt_cursor = Some(cursor);
                 }
@@ -653,9 +651,7 @@ impl DialogEntry {
                 // `redo()`: re-apply the last undone snapshot onto the
                 // undo stack; an empty stack is a no-op.
                 if let Some((value, cursor)) = self.prompt_history.redo.pop() {
-                    self.prompt_history
-                        .undo
-                        .push((self.value.clone(), self.prompt_cursor()));
+                    self.prompt_history.undo.push((self.value.clone(), self.prompt_cursor()));
                     self.value = value;
                     self.prompt_cursor = Some(cursor);
                 }
@@ -11642,7 +11638,7 @@ impl Store {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
-            prompt_history: Default::default(),
+            prompt_history: DialogPromptHistory::default(),
             theme_initial,
         };
         self.dialogs.update(|stack| stack.push(entry));
@@ -11682,7 +11678,7 @@ impl Store {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
-            prompt_history: Default::default(),
+            prompt_history: DialogPromptHistory::default(),
             theme_initial,
         };
         self.dialogs.update(|stack| stack.push(entry));
@@ -11715,7 +11711,7 @@ impl Store {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
-            prompt_history: Default::default(),
+            prompt_history: DialogPromptHistory::default(),
             theme_initial,
         };
         self.replace_dialog_entry(entry);
@@ -12950,7 +12946,7 @@ impl Store {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
-            prompt_history: Default::default(),
+            prompt_history: DialogPromptHistory::default(),
             theme_initial,
         };
         self.replace_dialog_entry(entry);
@@ -13048,7 +13044,7 @@ impl Store {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
-            prompt_history: Default::default(),
+            prompt_history: DialogPromptHistory::default(),
             theme_initial,
         };
         // G-506: select rides `api.show` → `dialog.replace`
@@ -14517,11 +14513,21 @@ impl Store {
                         // (the server's authoritative values — the
                         // ctx.data session rows carry both, data.ts:
                         // 1337-1339 over schema session.ts:551-556).
+                        // Timestamp milliseconds: the schema carries
+                        // NonNegativeInt while some wire rows arrive as
+                        // finite floats — the truncating cast is the
+                        // intended ms-floor semantics.
+                        let ts_ms = |value: f64| -> u64 {
+                            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                            {
+                                value.max(0.0) as u64
+                            }
+                        };
                         if let Some(created) = session.time_created {
-                            info.created = Some(created as u64);
+                            info.created = Some(ts_ms(created));
                         }
                         if let Some(updated) = session.time_updated {
-                            info.updated = Some(updated as u64);
+                            info.updated = Some(ts_ms(updated));
                         }
                     }
                 }
@@ -15324,10 +15330,8 @@ impl Store {
                     // optimistic admit's guess, data.ts:370-383's
                     // "durable payload and times replace the client's
                     // guess").
-                    let inbox_created = item
-                        .pointer("/time/created")
-                        .and_then(Value::as_u64)
-                        .or(event.created);
+                    let inbox_created =
+                        item.pointer("/time/created").and_then(Value::as_u64).or(event.created);
                     let files = item
                         .pointer("/payload/files")
                         .and_then(Value::as_array)

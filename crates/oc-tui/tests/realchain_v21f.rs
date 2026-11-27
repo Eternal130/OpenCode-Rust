@@ -663,7 +663,8 @@ fn urlencoding_encode(text: &str) -> String {
                 out.push(char::from(byte));
             }
             _ => {
-                out.push_str(&format!("%{byte:02X}"));
+                use std::fmt::Write as _;
+                let _ = write!(out, "%{byte:02X}");
             }
         }
     }
@@ -701,6 +702,22 @@ fn allow_subagent(box_: &Sandbox, ref_side: bool) {
         .unwrap_or_else(|error| panic!("write config {}: {error}", path.display()));
 }
 
+/// Rig diagnostic (log-only, stderr — never the PTY/exports): the
+/// rust server's session list after the resume booted — a SECOND row
+/// would mean the resume created a fresh session instead of attaching
+/// the first (the rig-health forensics for G-541-class failures).
+fn log_post_boot_session_list(server: &realchain_harness::ManagedServer, rust: &Sandbox) {
+    let query = format!(
+        "http://127.0.0.1:{}/api/session?directory={}&parentID=null&limit=50&order=desc",
+        server_url_port(&server.url),
+        urlencoding_encode(&rust.project.display().to_string())
+    );
+    if let Some((status, payload)) = realchain_harness::http_get(&query, server.password.as_deref())
+    {
+        eprintln!("V21F diag: post-boot session list http {status}: {}", truncate_diag(&payload));
+    }
+}
+
 #[test]
 fn v21f_resume_subagents_pair() {
     skip_without_ref_lane!();
@@ -721,7 +738,8 @@ fn v21f_resume_subagents_pair() {
     let pace = "synthetic:ttft=2500:tps=8";
     // Both gateways stay ALIVE through the whole two-phase test (the
     // resume pair re-uses the same servers).
-    let rust_gateway = Gateway::spawn_turn_paced("v21f-rs", &[], Some((&record_rust, &seeds)), pace);
+    let rust_gateway =
+        Gateway::spawn_turn_paced("v21f-rs", &[], Some((&record_rust, &seeds)), pace);
     let ref_gateway = Gateway::spawn_turn_paced("v21f-rsr", &[], Some((&record_ref, &seeds)), pace);
     let rust = sandbox("v21f-rs", rust_gateway.port);
     let refbox = sandbox("v21f-rsref", ref_gateway.port);
@@ -743,17 +761,7 @@ fn v21f_resume_subagents_pair() {
     rust_tui.arm_cursor_probe_answers(ROWS);
     let mut ref_tui = ref_mini_spawn(&refbox, &stage, COLS, ROWS);
     let capture = |rust_tui: &TuiProcess, ref_tui: &TuiProcess, state: &str| {
-        let roots = vec![
-            refbox.root.to_string_lossy().into_owned(),
-            rust.root.to_string_lossy().into_owned(),
-        ];
-        let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
-        let normalize = |grid: &str| normalize_grid(grid, &refs);
-        let ref_grid = normalize(&capture_settled(ref_tui));
-        let rust_grid = normalize(&capture_settled(rust_tui));
-        dump_grid(&format!("v21f-rs-{state}-ref"), &ref_grid);
-        dump_grid(&format!("v21f-rs-{state}-rust"), &rust_grid);
-        export_grid_diff("v21f-rs", state, &ref_grid, &rust_grid);
+        capture_pair_state(&rust, &refbox, rust_tui, ref_tui, state);
     };
     let rust_boot = rust_tui.wait_for(b"oc mini", 0, Duration::from_secs(30));
     let ref_boot = ref_tui.wait_for(b"oc mini", 0, Duration::from_secs(60));
@@ -809,26 +817,7 @@ fn v21f_resume_subagents_pair() {
     let ref_boot = ref_tui.wait_for(b"oc mini", 0, Duration::from_secs(60));
     let rust_replayed = V21FRig::wait_squashed(&rust_tui, "round-tripcompleted", 60);
     let ref_replayed = V21FRig::wait_squashed(&ref_tui, "round-tripcompleted", 90);
-    // Rig diagnostic (log-only, stderr — never the PTY/exports): the
-    // rust server's session list after the resume booted — a SECOND
-    // row would mean the resume created a fresh session instead of
-    // attaching the first (the rig-health forensics for G-541-class
-    // failures).
-    {
-        let query = format!(
-            "http://127.0.0.1:{}/api/session?directory={}&parentID=null&limit=50&order=desc",
-            server_url_port(&server.url),
-            urlencoding_encode(&rust.project.display().to_string())
-        );
-        if let Some((status, payload)) =
-            realchain_harness::http_get(&query, server.password.as_deref())
-        {
-            eprintln!(
-                "V21F diag: post-boot session list http {status}: {}",
-                truncate_diag(&payload)
-            );
-        }
-    }
+    log_post_boot_session_list(&server, &rust);
     assert!(
         rust_boot && ref_boot && rust_replayed && ref_replayed,
         "V21F resume RED: boot rust={rust_boot} ref={ref_boot} replayed rust={rust_replayed} \
@@ -837,18 +826,7 @@ fn v21f_resume_subagents_pair() {
         ref_tui.screen_text()
     );
     settle(5);
-    capture(&rust_tui, &ref_tui, "resume-settled");
-    // `down` (session.child.first) opens the subagent menu — the
-    // ACTIVE tab's rows (the phantom listing face).
-    rust_tui.write(b"\x1b[B");
-    ref_tui.write(b"\x1b[B");
-    settle(2);
-    capture(&rust_tui, &ref_tui, "resume-menu");
-    // Esc closes the menu; the settled frame exports again.
-    rust_tui.write(b"\x1b");
-    ref_tui.write(b"\x1b");
-    settle(2);
-    capture(&rust_tui, &ref_tui, "resume-menu-esc");
+    resume_menu_states(&rust, &refbox, &mut rust_tui, &mut ref_tui);
     rust_tui.shutdown(Duration::from_secs(10));
     ref_tui.shutdown(Duration::from_secs(10));
     ref_service_stop(&refbox, &stage);
@@ -856,4 +834,44 @@ fn v21f_resume_subagents_pair() {
     drop(lane);
     drop(rust_gateway);
     drop(ref_gateway);
+}
+
+/// The resume pair's state export (the roots-normalized grids, dumped
+/// and diff-exported under the v21f-rs scenario).
+fn capture_pair_state(
+    rust: &Sandbox,
+    refbox: &Sandbox,
+    rust_tui: &TuiProcess,
+    ref_tui: &TuiProcess,
+    state: &str,
+) {
+    let roots =
+        [refbox.root.to_string_lossy().into_owned(), rust.root.to_string_lossy().into_owned()];
+    let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
+    let normalize = |grid: &str| normalize_grid(grid, &refs);
+    let ref_grid = normalize(&capture_settled(ref_tui));
+    let rust_grid = normalize(&capture_settled(rust_tui));
+    dump_grid(&format!("v21f-rs-{state}-ref"), &ref_grid);
+    dump_grid(&format!("v21f-rs-{state}-rust"), &rust_grid);
+    export_grid_diff("v21f-rs", state, &ref_grid, &rust_grid);
+}
+
+/// The menu face states after the resume settles: `down`
+/// (session.child.first) opens the subagent menu — the ACTIVE tab's
+/// rows (the phantom listing face); esc closes it and the settled
+/// frame exports again.
+fn resume_menu_states(
+    rust: &Sandbox,
+    refbox: &Sandbox,
+    rust_tui: &TuiProcess,
+    ref_tui: &TuiProcess,
+) {
+    rust_tui.write(b"\x1b[B");
+    ref_tui.write(b"\x1b[B");
+    settle(2);
+    capture_pair_state(rust, refbox, rust_tui, ref_tui, "resume-menu");
+    rust_tui.write(b"\x1b");
+    ref_tui.write(b"\x1b");
+    settle(2);
+    capture_pair_state(rust, refbox, rust_tui, ref_tui, "resume-menu-esc");
 }
