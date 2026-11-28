@@ -1069,15 +1069,6 @@ impl Connection {
     }
 
     #[must_use]
-    pub fn state(&self) -> ConnectionState {
-        if self.attempts == 0 {
-            ConnectionState::Connecting
-        } else {
-            ConnectionState::Reconnecting { attempt: self.attempts }
-        }
-    }
-
-    #[must_use]
     pub fn cursor(&self) -> Option<&str> {
         self.cursor.as_deref()
     }

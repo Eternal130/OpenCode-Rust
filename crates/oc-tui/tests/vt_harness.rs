@@ -860,6 +860,16 @@ pub struct FakeLlm {
     /// `StartupLoading` temporal gate (the deadline stays armed but
     /// is inert once passed — later requests pass straight through).
     boot_stretch_until: Arc<Mutex<Option<std::time::Instant>>>,
+    /// G-548's PERMANENT test-only rig switch (the slowG reproducer
+    /// class): when set, `/api/event` opens the SSE response head but
+    /// NEVER writes the `server.connected` handshake frame — the stub
+    /// shape of a server that never emits the boot marker, so the
+    /// client's G-300 first-frame check (data.rs) keeps the app
+    /// NEVER-CONNECTED (the reconnect loop churns, the connection
+    /// state never reaches Connected). Default OFF: every other rig
+    /// keeps the faithful boot frame (the real server always prepends
+    /// it, oc-server sse.rs + ref handlers/event.ts:18-20).
+    omit_boot_frame: Arc<AtomicBool>,
 }
 
 impl FakeLlm {
@@ -888,10 +898,12 @@ impl FakeLlm {
         let script: Arc<Mutex<Option<Vec<ScriptEvent>>>> = Arc::new(Mutex::new(None));
         let delivered_feed: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let boot_stretch_until: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
+        let omit_boot_frame = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&shutdown);
         let shared_script = Arc::clone(&script);
         let shared_delivered = Arc::clone(&delivered_feed);
         let shared_boot_stretch = Arc::clone(&boot_stretch_until);
+        let shared_omit_boot_frame = Arc::clone(&omit_boot_frame);
         let shared_posts = Arc::clone(&prompt_posts);
         let shared_prompt_bodies = Arc::clone(&prompt_bodies);
         let shared_vcs = Arc::clone(&vcs);
@@ -917,6 +929,7 @@ impl FakeLlm {
                         let script = Arc::clone(&shared_script);
                         let delivered = Arc::clone(&shared_delivered);
                         let boot_stretch = Arc::clone(&shared_boot_stretch);
+                        let omit_boot_frame = Arc::clone(&shared_omit_boot_frame);
                         let posts = Arc::clone(&shared_posts);
                         let prompt_bodies = Arc::clone(&shared_prompt_bodies);
                         let vcs = Arc::clone(&shared_vcs);
@@ -940,6 +953,7 @@ impl FakeLlm {
                                 &script,
                                 &delivered,
                                 &boot_stretch,
+                                &omit_boot_frame,
                                 &posts,
                                 &prompt_bodies,
                                 &vcs,
@@ -988,7 +1002,16 @@ impl FakeLlm {
             script,
             delivered_feed,
             boot_stretch_until,
+            omit_boot_frame,
         }
+    }
+
+    /// G-548's rig switch — arm BEFORE the app boots: `/api/event`
+    /// then never writes the `server.connected` boot frame, keeping
+    /// the client never-connected (the slowG reproducer shape). See
+    /// the field doc for the faithfulness note.
+    pub fn omit_server_connected_boot_frame(&self) {
+        self.omit_boot_frame.store(true, Ordering::SeqCst);
     }
 
     /// Serve raw `session.list` wire rows (TUI-5/6/7's richer
@@ -1079,6 +1102,7 @@ fn handle(
     script: &Arc<Mutex<Option<Vec<ScriptEvent>>>>,
     delivered_feed: &Arc<Mutex<Vec<String>>>,
     boot_stretch_until: &Arc<Mutex<Option<std::time::Instant>>>,
+    omit_boot_frame: &Arc<AtomicBool>,
     prompt_posts: &Arc<AtomicUsize>,
     prompt_bodies: &Arc<Mutex<Vec<String>>>,
     vcs: &Arc<AtomicBool>,
@@ -1421,8 +1445,13 @@ fn handle(
         // G-300: the client asserts the FIRST frame is the
         // `server.connected` handshake marker (the real server
         // prepends it per response) — send it before anything else
-        // AFTER the HTTP response head.
-        if socket.write_all(SSE_HANDSHAKE_FRAME.as_bytes()).is_err() {
+        // AFTER the HTTP response head. G-548's rig switch skips the
+        // marker (see FakeLlm::omit_server_connected_boot_frame): the
+        // connect window then elapses with no first frame and the
+        // reconnect loop churns — never connected.
+        if !omit_boot_frame.load(Ordering::SeqCst)
+            && socket.write_all(SSE_HANDSHAKE_FRAME.as_bytes()).is_err()
+        {
             return;
         }
         // The no-prompt quiet-hold window: generous — a loaded box
