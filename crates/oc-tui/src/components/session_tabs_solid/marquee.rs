@@ -56,35 +56,54 @@ pub fn marquee_overflows(value: &str, width: usize) -> bool {
     display_width(value) > width
 }
 
-/// `marqueeTextParts(value, width, offset)` — the visible window as a
-/// (text, leading-separator) run list. Offsets ≤ 0 (and fitting
+/// `marqueeTextParts` — the visible window's JOINED text (the ref's
+/// `marqueeText`, util/marquee.ts:19-23). Offsets ≤ 0 (and fitting
 /// titles) render the truncated head, no loop.
 #[must_use]
+// The ref's `marqueeText` (util/marquee.ts:19-23) — the joined-window
+// API; the strip painter consumes the PARTS (G-502①), so the joined
+// form is the tests' seam.
+#[allow(dead_code)]
 pub fn marquee_text(value: &str, width: usize, offset: usize) -> String {
-    marquee_text_parts(value, width, offset).join("")
+    marquee_text_parts(value, width, offset).iter().map(|part| part.value.as_str()).collect()
 }
 
-/// The parts (joined with the separator trailing each chunk that ends
-/// on the loop's `·`) — the painter only needs the joined string and
-/// where the separator sits, so the port returns the joined text plus
-/// the separator's cell index (None while the head shows).
+/// One visible window cluster — `value` is the grapheme, `separator`
+/// marks the loop's `·` (the ref's `MarqueeTextPart`
+/// {value, separator}, util/marquee.ts:6-9: `separator: value === "·"`
+/// — the spaces around it are NOT separators).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarqueeTextPart {
+    pub value: String,
+    pub separator: bool,
+}
+
+/// The parts (G-502① — the separator flag the title painters consume
+/// for the `tint(faded, background(), 0.55)` wash, session-tabs.tsx:
+/// 879/1629). Offsets ≤ 0 (and fitting titles) render the truncated
+/// head with every part `separator: false` (the ref's non-scrolling
+/// branch, session-tabs.tsx:759-762/1596-1599).
 #[must_use]
-pub fn marquee_text_parts(value: &str, width: usize, offset: usize) -> Vec<String> {
+pub fn marquee_text_parts(value: &str, width: usize, offset: usize) -> Vec<MarqueeTextPart> {
     if width == 0 {
         return Vec::new();
     }
     if display_width(value) <= width || offset == 0 {
-        return vec![crate::wrap::take_width(value, width)];
+        return crate::wrap::take_width(value, width)
+            .chars()
+            .map(|ch| MarqueeTextPart { value: ch.to_string(), separator: false })
+            .collect();
     }
     // The loop: title graphemes, then the separator's (space · space)
     // — whole clusters (G-476②: `Locale.graphemes`, util/marquee.ts:30-33;
     // a ZWJ family or skin-toned emoji is ONE loop cell, never cut).
-    let mut loop_cells: Vec<(String, usize)> = Vec::new();
+    let mut loop_cells: Vec<(MarqueeTextPart, usize)> = Vec::new();
     for atom in crate::wrap::flatten(value, crate::style::Style::new()) {
-        loop_cells.push((atom.text, atom.width));
+        loop_cells.push((MarqueeTextPart { value: atom.text, separator: false }, atom.width));
     }
     for atom in crate::wrap::flatten(GAP, crate::style::Style::new()) {
-        loop_cells.push((atom.text, atom.width));
+        let separator = atom.text == "\u{b7}";
+        loop_cells.push((MarqueeTextPart { value: atom.text, separator }, atom.width));
     }
     let cycle = loop_cells.iter().map(|(_, w)| *w).sum::<usize>().max(1);
     let cursor = offset % cycle;
@@ -100,17 +119,18 @@ pub fn marquee_text_parts(value: &str, width: usize, offset: usize) -> Vec<Strin
         start = index + 1;
     }
     // One doubled loop covers any window start.
-    let parts: Vec<&(String, usize)> = loop_cells.iter().chain(loop_cells.iter()).collect();
-    let mut out = String::new();
+    let parts: Vec<&(MarqueeTextPart, usize)> =
+        loop_cells.iter().chain(loop_cells.iter()).collect();
+    let mut out: Vec<MarqueeTextPart> = Vec::new();
     let mut taken = 0usize;
-    for (text, w) in parts.iter().skip(start) {
+    for (part, w) in parts.iter().skip(start) {
         if taken + w > width {
             break;
         }
-        out.push_str(text);
+        out.push(part.clone());
         taken += w;
     }
-    vec![out]
+    out
 }
 
 /// The deterministic scroll state for one hovered tab (the port of
@@ -192,19 +212,35 @@ impl Marquee {
 
     /// The leading fade (`leading.animate({opacity: 1})` as the scroll
     /// starts; `leading.animate({opacity: 0})` at the cycle's end —
-    /// session-tabs.tsx:296-302): smootherstep rise over the fade
-    /// window after the delay, hold 1 while the pass runs, then from
-    /// the reset tick a 250 ms fall from whatever value the rise had
-    /// reached (the ref's tween starts from the current value).
+    /// session-tabs.tsx:296-302): G-501 — the ref tween's DEFAULT
+    /// smoothstep ease (3t²−2t³, `tween({duration: 0.25})` passes no
+    /// ease, animation.ts:35/50 — the port rode smootherstep), rise
+    /// over the fade window after the delay, hold 1 while the pass
+    /// runs, then from the reset tick a 250 ms fall from whatever
+    /// value the rise had reached (the ref's tween starts from the
+    /// current value). G-502② — with animations OFF the ref's
+    /// `animate()` JUMPS instantly (`if (!enabled()) return
+    /// jump(next)`, animation.ts:71-74/90): 0 through the delay, 1
+    /// from the delay's end until the reset tick, 0 after.
     #[must_use]
-    pub fn leading(&self, now_ms: u64) -> f64 {
+    pub fn leading(&self, now_ms: u64, animations: bool) -> f64 {
         let Some(_) = self.active else { return 0.0 };
         let elapsed = now_ms.saturating_sub(self.entered_ms);
-        if elapsed <= MARQUEE_DELAY {
+        if elapsed < MARQUEE_DELAY {
             return 0.0;
         }
+        if !animations {
+            // G-502② — the disabled path jumps to each target the
+            // moment its timer fires (the createEffect's
+            // `if (enabled()) return; jump(target)` keeps it there).
+            let reset = self.reset_ms();
+            if self.cycle_width > 1 && elapsed >= reset {
+                return 0.0;
+            }
+            return 1.0;
+        }
         let rise = |since_delay: u64| {
-            crate::components::tab_pulse::smootherstep(
+            crate::components::tab_pulse::smoothstep(
                 f64::from(u32::try_from(since_delay.min(LEADING_FADE_MS)).unwrap_or(0))
                     / f64::from(u32::try_from(LEADING_FADE_MS).unwrap_or(1)),
             )
@@ -422,22 +458,93 @@ mod tests {
             "stays at window 0 (the interval is cleared)"
         );
         // The leading fade rides the same clock.
-        assert_eq!(marquee.leading(600), 0.0);
-        assert!((marquee.leading(600 + 125) - 0.5).abs() < 1e-9, "tween midpoint");
-        assert_eq!(marquee.leading(600 + 250), 1.0);
+        assert_eq!(marquee.leading(600, true), 0.0);
+        assert!((marquee.leading(600 + 125, true) - 0.5).abs() < 1e-9, "smoothstep midpoint");
+        assert_eq!(marquee.leading(600 + 250, true), 1.0);
         // G-476①: at the reset tick the fade falls back out over
         // LEADING_FADE_MS (the rise had already completed: the reset
         // lands ≥ 250 ms after the delay for any real title).
         let reset = 600 + 80 * (cycle as u64 - 1);
-        assert_eq!(marquee.leading(reset), 1.0, "full at the reset tick");
+        assert_eq!(marquee.leading(reset, true), 1.0, "full at the reset tick");
         assert!(
-            (marquee.leading(reset + LEADING_FADE_MS / 2) - 0.5).abs() < 1e-9,
+            (marquee.leading(reset + LEADING_FADE_MS / 2, true) - 0.5).abs() < 1e-9,
             "fade-out midpoint"
         );
-        assert_eq!(marquee.leading(reset + LEADING_FADE_MS), 0.0, "faded out");
+        assert_eq!(marquee.leading(reset + LEADING_FADE_MS, true), 0.0, "faded out");
         // Leave + re-enter restarts from 0.
         marquee.leave("s1");
         assert_eq!(marquee.offset(10_000), 0, "reset on leave");
+    }
+
+    /// G-501 — the leading fade rides the ref `tween()`'s DEFAULT
+    /// smoothstep ease (3t²−2t³, `tween({duration: 0.25})` passes no
+    /// ease, animation.ts:35/50 — the port rode smootherstep): at a
+    /// quarter in the ease has reached only ≈15.6% (smootherstep
+    /// ≈10.4%, linear 25%).
+    #[test]
+    fn leading_fades_with_the_ref_smoothstep_ease() {
+        let mut marquee = Marquee::default();
+        marquee.enter("s1", "A very long session title that overflows", 10, 0);
+        assert_eq!(marquee.leading(600, true), 0.0, "origin at the delay's end");
+        assert!((marquee.leading(600 + 62, true) - smoothstep_at(62)).abs() < 1e-9);
+        assert!((marquee.leading(600 + 125, true) - 0.5).abs() < 1e-9, "midpoint");
+        assert!((marquee.leading(600 + 187, true) - smoothstep_at(187)).abs() < 1e-9);
+        assert_eq!(marquee.leading(600 + 250, true), 1.0, "full");
+    }
+
+    fn smoothstep_at(since_delay: u64) -> f64 {
+        let t = f64::from(u32::try_from(since_delay.min(LEADING_FADE_MS)).unwrap_or(0))
+            / f64::from(u32::try_from(LEADING_FADE_MS).unwrap_or(1));
+        crate::components::tab_pulse::smoothstep(t)
+    }
+
+    /// G-502② — with animations OFF the leading fade JUMPS instantly
+    /// (`animate()`'s disabled arm, animation.ts:71-74/90): 0 through
+    /// the delay, 1 from the delay's end until the reset tick, 0
+    /// after — never a tween. The pre-fix port always tweened.
+    #[test]
+    fn leading_jumps_instantly_with_animations_off() {
+        let mut marquee = Marquee::default();
+        marquee.enter("s1", "A very long session title that overflows", 10, 0);
+        assert_eq!(marquee.leading(0, false), 0.0, "still before the delay");
+        assert_eq!(marquee.leading(599, false), 0.0, "inside the delay");
+        // The delay's timeout fires → animate({opacity: 1}) → jump.
+        assert_eq!(marquee.leading(600, false), 1.0, "jumps to 1 at the delay's end");
+        assert_eq!(marquee.leading(600 + 125, false), 1.0, "no tween at a quarter");
+        assert_eq!(marquee.leading(600 + 250, false), 1.0, "holds 1 mid-scroll");
+        // The reset tick fires → animate({opacity: 0}) → jump.
+        let cycle = marquee_cycle_width("A very long session title that overflows");
+        let reset = 600 + 80 * (cycle as u64 - 1);
+        assert_eq!(marquee.leading(reset - 1, false), 1.0, "still 1 before the reset");
+        assert_eq!(marquee.leading(reset, false), 0.0, "jumps to 0 at the reset tick");
+        assert_eq!(marquee.leading(reset + 125, false), 0.0, "stays 0");
+    }
+
+    /// G-502① — the window parts carry the loop `·`'s separator flag
+    /// (`MarqueeTextPart`, util/marquee.ts:6-9/32: `separator:
+    /// value === "·"` — the GAP's spaces are never separators, and the
+    /// non-scrolling head has none at all).
+    #[test]
+    fn window_parts_flag_the_loop_separator() {
+        let title = "A very long session title that overflows";
+        let width = 10;
+        // The head (offset 0): no separators.
+        let head = marquee_text_parts(title, width, 0);
+        assert!(head.iter().all(|part| !part.separator), "the head has no separators");
+        assert_eq!(head.iter().map(|p| p.value.as_str()).collect::<String>(), "A very lon");
+        // Mid-loop windows: exactly the `·` clusters carry the flag.
+        let mut seen_separator = false;
+        for offset in 1..marquee_cycle_width(title) {
+            let parts = marquee_text_parts(title, width, offset);
+            for part in &parts {
+                let is_dot = part.value == "·";
+                assert_eq!(part.separator, is_dot, "offset {offset}: only the · is a separator");
+                if is_dot {
+                    seen_separator = true;
+                }
+            }
+        }
+        assert!(seen_separator, "the loop's · crossed the window");
     }
 
     /// The steady ticker (beta.13 bug 3): while a scroll runs,

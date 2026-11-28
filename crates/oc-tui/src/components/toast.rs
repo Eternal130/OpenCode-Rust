@@ -196,14 +196,40 @@ pub fn affordance_text_width(toast: &ToastOptions) -> usize {
 }
 
 /// The toast surfaces' word wrap — the ref title/message texts'
-/// default (`wrapMode: "word"`, ui/toast.tsx:84-91): break after the
-/// global seam's opportunities (space/dot/hyphen, [`crate::wrap::
-/// is_break_after`]) PLUS the slash — evidenced by the ref
-/// plugin-fallback grids, where the long title's second line ends at
-/// "…/`node_modules`/" ahead of "broken-plugin" (a break after the
-/// trailing `/`, which the global set lacks).
+/// default (`wrapMode: "word"`, ui/toast.tsx:76/90): the seam is the
+/// opentui text buffer's LAYOUT-WRAP break set (`text_buffer.rs`
+/// `ascii_break_kind` — the port of utf8.zig:159-165): whitespace
+/// PLUS the punctuation family `- / \ . , ; : ! ? ( ) [ ] { }`,
+/// each closing its token (the break char stays with its token — a
+/// fitting space rides the line's end, exactly
+/// [`crate::wrap::wrap_atoms`]'s packing), a token wider than the
+/// line hard-splits by chars. G-517 — the pre-fix port carried only
+/// the global seam's space/dot/hyphen (+ the slash): a long
+/// single-token JSON route-shape message (the v21b-router arms) was
+/// ONE giant token to the port but MANY tokens to the ref (breaking
+/// at every `:`/`,`), so the rows packed differently (mid-word
+/// hard-splits vs the ref's punctuation boundaries — the wrap WIDTH
+/// itself already agreed: rails 58/117, text area 54 on both ends).
 fn toast_break_after(ch: char) -> bool {
-    ch == '/' || crate::wrap::is_break_after(ch)
+    matches!(
+        ch,
+        ' ' | '\t'
+            | '-'
+            | '/'
+            | '\\'
+            | '.'
+            | ','
+            | ';'
+            | ':'
+            | '!'
+            | '?'
+            | '('
+            | ')'
+            | '['
+            | ']'
+            | '{'
+            | '}'
+    ) || crate::wrap::is_break_after(ch)
 }
 
 /// Word-wrap `text` to `width` display cells (greedy packing, the

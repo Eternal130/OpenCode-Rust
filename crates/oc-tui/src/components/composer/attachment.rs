@@ -470,6 +470,7 @@ mod tests {
         let staged = vec![
             FileMention {
                 name: "one.png".into(),
+                description: None,
                 start: 0,
                 end: 9,
                 payload: Some(AttachmentPayload {
@@ -480,6 +481,7 @@ mod tests {
             },
             FileMention {
                 name: "two.png".into(),
+                description: None,
                 start: 0,
                 end: 9,
                 payload: Some(png.clone()),
@@ -510,6 +512,7 @@ mod tests {
         // PDFs never reuse (the ref computes `existing` for Image only).
         let staged_pdf = vec![FileMention {
             name: "doc.pdf".into(),
+            description: None,
             start: 0,
             end: 9,
             payload: Some(pdf.clone()),

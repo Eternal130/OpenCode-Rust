@@ -1874,6 +1874,16 @@ fn footer_key_from_spec(spec: &str) -> Option<FooterKey> {
         "tab" => Some(FooterKey::Tab),
         "pageup" => Some(FooterKey::PageUp),
         "pagedown" => Some(FooterKey::PageDown),
+        // G-498 — the searchable-panel controller's remaining key
+        // group (footer.command.tsx:186-259): home/end reveal
+        // (:233-243), ctrl+n moves down (:215-219), bare ctrl+u clears
+        // the query (:254-257). The old port dropped all four specs
+        // here (a multi-char spec fell to the single-printable branch
+        // and returned None).
+        "home" => Some(FooterKey::Home),
+        "end" => Some(FooterKey::End),
+        "ctrl+n" => Some(FooterKey::CtrlN),
+        "ctrl+u" => Some(FooterKey::CtrlU),
         _ => {
             let mut chars = spec.chars();
             let first = chars.next()?;

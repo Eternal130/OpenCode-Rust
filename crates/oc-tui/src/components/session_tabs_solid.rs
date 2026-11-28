@@ -278,6 +278,7 @@ fn marquee_offset(
     title: &str,
     title_width: usize,
     hovered: bool,
+    animations: bool,
     now_ms: u64,
 ) -> (usize, f64) {
     MARQUEE.with(|marquee| {
@@ -287,7 +288,7 @@ fn marquee_offset(
         } else {
             marquee.leave(key);
         }
-        (marquee.offset(now_ms), marquee.leading(now_ms))
+        (marquee.offset(now_ms), marquee.leading(now_ms, animations))
     })
 }
 
@@ -418,12 +419,22 @@ fn title_chunks(inputs: &StripInputs, paint: &TabPaint, key: &str) -> StyledText
     // still frame (`marqueeTextParts(title, width, offset)`); the
     // leading fade rides the first FADE_WIDTH cells.
     let scrolling = paint.hovered && self::marquee::marquee_overflows(&title, title_width);
-    let (offset, leading) = marquee_offset(key, &title, title_width, scrolling, inputs.clock_ms);
-    let title_text = if scrolling && offset > 0 {
-        self::marquee::marquee_text(&title, title_width, offset)
+    let (offset, leading) =
+        marquee_offset(key, &title, title_width, scrolling, inputs.animations, inputs.clock_ms);
+    // G-502① — the window parts (the ref's `visibleTitleParts`,
+    // session-tabs.tsx:1593-1600: the marquee's part list while
+    // scrolling, else the truncated head's graphemes — every part of
+    // the head `separator: false`). The per-part flags feed the
+    // separator wash below.
+    let parts: Vec<self::marquee::MarqueeTextPart> = if scrolling && offset > 0 {
+        self::marquee::marquee_text_parts(&title, title_width, offset)
     } else {
         take_width(&title, title_width)
+            .chars()
+            .map(|ch| self::marquee::MarqueeTextPart { value: ch.to_string(), separator: false })
+            .collect()
     };
+    let title_text: String = parts.iter().map(|part| part.value.as_str()).collect();
     let foreground =
         if paint.selected || paint.hovered { inputs.colors.text } else { inputs.colors.muted };
     let bold = u32::from(paint.selected); // attributes bit 1 = BOLD
@@ -431,21 +442,36 @@ fn title_chunks(inputs: &StripInputs, paint: &TabPaint, key: &str) -> StyledText
                                           // availableTitleWidth > FADE_WIDTH (session-tabs.tsx:1605-1607).
     let title_fades =
         title.chars().count() > title_width_chars(&title, title_width) && title_width > FADE_WIDTH;
+    // G-502① — the separator wash, applied LAST in the chain exactly
+    // like the ref's `characterColor` (session-tabs.tsx:1617-1629:
+    // base → glow → fade, then `separator ? tint(faded,
+    // background(), 0.55) : faded`): the loop `·` pulls 55% toward
+    // the tab's background. The head's parts never carry the flag.
+    let wash = |fg: crate::components::tab_pulse::Rgb, separator: bool| {
+        if separator {
+            tint(fg, paint.bg, 0.55)
+        } else {
+            fg
+        }
+    };
     match paint.glow {
         None => {
             if title_fades {
-                // Per-char fade chunks (the tsx renders per-glyph spans
+                // Per-part fade chunks (the tsx renders per-glyph spans
                 // exactly while `titleFades`), leading = the marquee's
                 // leading fade.
-                let length = title_text.chars().count();
+                let length = parts.len();
                 StyledText::new(
-                    title_text
-                        .chars()
+                    parts
+                        .iter()
                         .enumerate()
-                        .map(|(index, ch)| {
-                            let fg = fade_title_color(foreground, paint.bg, index, length, leading);
+                        .map(|(index, part)| {
+                            let fg = wash(
+                                fade_title_color(foreground, paint.bg, index, length, leading),
+                                part.separator,
+                            );
                             TextChunk {
-                                text: ch.to_string(),
+                                text: part.value.clone(),
                                 fg: Some(rgba(fg)),
                                 bg: None,
                                 attributes: bold,
@@ -465,18 +491,23 @@ fn title_chunks(inputs: &StripInputs, paint: &TabPaint, key: &str) -> StyledText
             }
         }
         Some(glow) => StyledText::new(
-            title_text
-                .chars()
+            parts
+                .iter()
                 .enumerate()
-                .map(|(cell, ch)| {
+                .map(|(cell, part)| {
+                    // The glow's index input is the PART ordinal
+                    // (`glowTextColor(base, glow, 1 + numberWidth +
+                    // index, width)` over `visibleTitleParts`,
+                    // session-tabs.tsx:1619).
                     let column = 1 + number_width + cell;
                     let mut fg = glow_text_color(foreground, glow, column, paint.width, 1.0);
                     if title_fades {
-                        let length = title_text.chars().count();
+                        let length = parts.len();
                         fg = fade_title_color(fg, paint.bg, cell, length, leading);
                     }
+                    let fg = wash(fg, part.separator);
                     TextChunk {
-                        text: ch.to_string(),
+                        text: part.value.clone(),
                         fg: Some(rgba(fg)),
                         bg: None,
                         attributes: bold,
@@ -1841,9 +1872,14 @@ mod tests {
         );
         let marker = *frame.cells[0].iter().find(|cell| cell.ch == '•').expect("marker");
         // The color: the accent brightened through the mid-boost
-        // (flash 8/9 × 0.3) sinking toward the background
-        // (min(1, (7/9)/0.8) = 35/36).
-        let opacity: f64 = 7.0 / 9.0;
+        // (flash × 0.3) sinking toward the background
+        // (min(1, opacity/0.8)). G-501 re-pin: the dissolve is the ref
+        // tween's DEFAULT smoothstep ease (`tween({duration: 0.18})`
+        // passes no ease, animation.ts:50) — at elapsed 40/180 the
+        // LINEAR fall was 7/9; the smoothstep holds higher
+        // (1 − sm(2/9) ≈ 0.874 — the marker lingers brighter longer,
+        // exactly the ref's ease).
+        let opacity: f64 = 1.0 - crate::components::tab_pulse::smoothstep(40.0 / 180.0);
         let flash = (1.0 - (opacity - 0.8).abs() / 0.2).max(0.0);
         let brightened =
             crate::components::tab_pulse::tint(colors.accent, colors.text, flash * 0.3);

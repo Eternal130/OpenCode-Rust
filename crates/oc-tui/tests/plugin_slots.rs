@@ -193,8 +193,13 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
             size: spec.size.clone(),
             centered: spec.centered,
         },
-        UiRequest::DialogSet { size, centered, .. } => {
-            PluginUiEvent::DialogSet { size: size.clone(), centered: *centered }
+        UiRequest::DialogSet { size, centered, show_rows, .. } => {
+            // G-518 — the re-flattened show rows ride the set.
+            PluginUiEvent::DialogSet {
+                size: size.clone(),
+                centered: *centered,
+                show_rows: show_rows.clone(),
+            }
         }
         UiRequest::DialogClear { .. } => PluginUiEvent::DialogClear,
         UiRequest::DialogSelect {

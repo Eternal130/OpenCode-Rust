@@ -5605,10 +5605,14 @@ impl Store {
     /// (`deduplicatePromptImages(store.prompt.files)` filtered to
     /// `data:image/*`, prompt/index.tsx:393-395): the composer
     /// draft's image attachments as data URIs, deduplicated by
-    /// identity (`(name, mention, uri)` — the ref's
-    /// `JSON.stringify([name, description, mention.text])` + payload
-    /// key, prompt/attachment.ts:40-50; mentionless files pass
-    /// through). EMPTY while the config gate is off.
+    /// identity — G-504: the ref's key is
+    /// `JSON.stringify([name, description, mention.text])` with the
+    /// payload (the URI) as the per-metadata set member
+    /// (prompt/attachment.ts:42-47) — two files with the same
+    /// name+mention+uri but DIFFERENT descriptions are DISTINCT on
+    /// the ref (different metadata) while the old port's
+    /// `(name, mention, uri)` tuple dropped the second; mentionless
+    /// files pass through. EMPTY while the config gate is off.
     #[must_use]
     pub fn prompt_image_previews(&self, session_id: &str) -> Vec<String> {
         if !self.prompt_image_preview.get() {
@@ -5625,7 +5629,10 @@ impl Store {
             let uri = payload.to_data_uri();
             match &file.mention {
                 Some(mention) => {
-                    let key = (file.name.clone(), mention.clone(), uri.clone());
+                    // The metadata triple + the payload — the ref's
+                    // Map<metadata, Set<payload>> as a flat tuple.
+                    let key =
+                        (file.name.clone(), file.description.clone(), mention.clone(), uri.clone());
                     if seen.insert(key) {
                         out.push(uri);
                     }
@@ -11982,6 +11989,10 @@ impl Store {
     /// per-line `{prompt, timestamp}` decode, corrupt lines skipped,
     /// the last MAX entries kept). Called at boot with the resolved
     /// state root; a missing file leaves the stash empty.
+    // The G-504 description decode threads through the same single
+    // pass as the rest of the fields (the ref's parsePromptStash is
+    // one loop over the JSON lines).
+    #[allow(clippy::too_many_lines)]
     pub fn stash_init(&self, path: Option<std::path::PathBuf>) {
         let Some(path) = path else { return };
         let mut entries = Vec::new();
@@ -12015,6 +12026,13 @@ impl Store {
                         .unwrap_or(0);
                         let mention =
                             file.get("mention").and_then(|v| v.as_str()).map(str::to_owned);
+                        // G-504 — the wire `description` round-trips
+                        // (the identity key reads it,
+                        // prompt/attachment.ts:45).
+                        let description = file
+                            .get("description")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned);
                         let payload =
                             file.get("payload").and_then(|p| p.as_object()).and_then(|payload| {
                                 let mime = payload.get("mime")?.as_str()?.to_owned();
@@ -12023,6 +12041,7 @@ impl Store {
                             });
                         draft.files.push(crate::components::composer::FileMention {
                             name: name.to_owned(),
+                            description,
                             start,
                             end,
                             payload,
@@ -12106,6 +12125,11 @@ impl Store {
                             "start": file.start,
                             "end": file.end,
                         });
+                        // G-504 — the description crosses with the
+                        // files (the identity key reads it).
+                        if let Some(description) = &file.description {
+                            value["description"] = serde_json::json!(description);
+                        }
                         if let Some(mention) = &file.mention {
                             value["mention"] = serde_json::json!(mention);
                         }
@@ -13021,7 +13045,23 @@ impl Store {
     /// medium (dialogWidth 60, dialog.tsx:14-18); the supervisor's
     /// non-{medium,large,xlarge} → None filter crosses as the absent
     /// arm and lands on the same reset.
-    pub fn set_plugin_dialog_presentation(&self, size: Option<&str>, centered: bool) {
+    ///
+    /// G-518 — `show_rows` re-flows the ACTIVE show dialog's baked
+    /// rows: the ref's dialog children are LIVE flex elements
+    /// (`{value.stack.at(-1)!.element}`, ui/dialog.tsx:242-246), so
+    /// `set({size:"large"})` widens the box and the space-between rows
+    /// re-flow to the new width (the port's one-shot flatten baked the
+    /// 60-padding). The rows apply ONLY when the top dialog is the
+    /// requesting plugin's show (`plugin:{id}:show`) — a set from any
+    /// plugin re-flows whatever show is active (the ref's store size
+    /// is global), and a non-show top dialog just resizes.
+    pub fn set_plugin_dialog_presentation(
+        &self,
+        size: Option<&str>,
+        centered: bool,
+        show_rows: Option<&[String]>,
+        plugin_id: &str,
+    ) {
         let size = match size {
             Some("large") => DialogSize::Large,
             Some("xlarge") => DialogSize::Xlarge,
@@ -13031,6 +13071,24 @@ impl Store {
             top.size = size;
             top.centered = centered;
         });
+        // G-518 — the live-children re-flow: replace the active show
+        // dialog's rows with the re-flattened set.
+        if let Some(rows) = show_rows {
+            let top_is_show = self.top_dialog().is_some_and(|top| {
+                matches!(
+                    &top.kind,
+                    DialogKind::Plugin { id, .. } if id == &format!("plugin:{plugin_id}:show")
+                )
+            });
+            if top_is_show {
+                let id = format!("plugin:{plugin_id}:show");
+                self.plugin_dialogs.update(|dialogs| {
+                    if let Some(content) = dialogs.get_mut(&id) {
+                        content.rows = rows.to_vec();
+                    }
+                });
+            }
+        }
         self.request_redraw();
     }
 
@@ -16939,6 +16997,114 @@ mod tests {
     use crate::components::command_palette::CommandDispatcher as _;
     use crate::components::message::model::{Part, PartTime, ToolState, ToolStatus};
     use crate::data::SessionSnapshot;
+
+    /// G-504 — `deduplicatePromptImages`' identity key reads the
+    /// DESCRIPTION (prompt/attachment.ts:42-47:
+    /// `JSON.stringify([name, description, mention.text])` + the
+    /// payload URI): two staged images with the same name+mention+uri
+    /// but DIFFERENT descriptions are distinct rows (different
+    /// metadata) — the ref keeps both, the old port's
+    /// `(name, mention, uri)` tuple dropped the second. Same
+    /// description → the duplicate drops; mentionless → always kept.
+    #[test]
+    fn prompt_image_previews_dedup_key_carries_the_description() {
+        use crate::components::composer::{AttachmentPayload, Composer, FileMention};
+        let store = Store::new(Runtime::new());
+        store.set_prompt_image_preview(true);
+        let payload =
+            AttachmentPayload { mime: "image/png".to_owned(), data: "iVBORw0KGgo=".to_owned() };
+        let mention_chip = |description: Option<&str>| FileMention {
+            name: "clipboard".to_owned(),
+            description: description.map(str::to_owned),
+            start: 0,
+            end: 9,
+            payload: Some(payload.clone()),
+            mention: Some("[Image 1]".to_owned()),
+        };
+        let mut composer = Composer::default();
+        composer.draft.text = "[Image 1] [Image 1] [Image 1]".to_owned();
+        composer.draft.files = vec![
+            mention_chip(None),
+            mention_chip(None),
+            mention_chip(Some("first look")),
+            mention_chip(Some("second look")),
+            FileMention {
+                name: "clipboard".to_owned(),
+                description: None,
+                start: 0,
+                end: 9,
+                payload: Some(payload.clone()),
+                mention: None,
+            },
+        ];
+        store.set_composer("s1", &composer);
+        let previews = store.prompt_image_previews("s1");
+        // 1 (the identity duplicate drops) + 2 (the two DESCRIPTIONS
+        // are distinct metadata — both kept) + 1 (mentionless always
+        // kept) = 4.
+        assert_eq!(previews.len(), 4, "the description splits the identity");
+        assert!(previews.iter().all(|uri| uri.starts_with("data:image/png;")), "the URIs");
+    }
+
+    /// G-518 — `dialog.show` rows RE-FLOW after `dialog.set({size})`:
+    /// the ref's dialog children are live flex elements (the Dialog
+    /// mounts `stack.at(-1).element` raw, ui/dialog.tsx:242-246), so
+    /// `set({size:"large"})` widens the box (dialogWidth 88,
+    /// dialog.tsx:14-18) and the space-between rows re-layout at 88.
+    /// The port's bounded projection re-flattens host-side (the
+    /// remembered render) and the set carries the rows — they apply
+    /// ONLY when the top dialog is that plugin's show.
+    #[test]
+    fn plugin_dialog_set_reflows_the_show_rows() {
+        let store = Store::new(Runtime::new());
+        let content = PluginDialogContent {
+            title: String::new(),
+            rows: vec![
+                "v21b two left                                        right".to_owned(),
+                "v21b two long row word word word word word tail".to_owned(),
+            ],
+            options: Vec::new(),
+            placeholder: None,
+            current: None,
+            has_search: false,
+        };
+        store.open_plugin_dialog_show("p.tui", content, 1, None, false);
+        // set({size:"large"}) with the re-flattened rows: the show's
+        // baked rows replace at the new width.
+        let wide_rows = vec![
+            "v21b two left                                                                      right"
+                .to_owned(),
+            "v21b two long row word word word word word word word word tail".to_owned(),
+        ];
+        store.set_plugin_dialog_presentation(Some("large"), false, Some(&wide_rows), "p.tui");
+        let top = store.top_dialog().expect("the show entry");
+        assert_eq!(top.size, DialogSize::Large);
+        let rows = store
+            .plugin_dialog_content("plugin:p.tui:show")
+            .expect("the show content")
+            .rows
+            .clone();
+        assert_eq!(rows, wide_rows, "the rows re-flowed to the large width");
+        // A set with NO rows (another plugin's, or a non-show top):
+        // the presentation still applies, the rows keep.
+        store.set_plugin_dialog_presentation(None, true, None, "other.tui");
+        assert_eq!(
+            store.plugin_dialog_content("plugin:p.tui:show").expect("content").rows,
+            wide_rows,
+            "a rowless set leaves the show rows alone"
+        );
+        // Rows aimed at a NON-show top dialog (here: after clear) are
+        // dropped — the top-dialog guard finds no show to re-flow, so
+        // the content map keeps its rows untouched.
+        store.clear_dialogs();
+        let stale_rows = vec!["these must not land".to_owned()];
+        store.set_plugin_dialog_presentation(Some("large"), false, Some(&stale_rows), "p.tui");
+        assert_eq!(
+            store.plugin_dialog_content("plugin:p.tui:show").expect("content").rows,
+            wide_rows,
+            "no show dialog is active — the rows found no target"
+        );
+    }
 
     /// G-506 — `dialog.show` REPLACES (api.tsx:334-336 →
     /// dialog.replace, dialog.tsx:170-189): show#2 while #1 is open

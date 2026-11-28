@@ -1187,6 +1187,7 @@ mod tests {
             text: "Compare [Image 1] with the current design".into(),
             files: vec![FileMention {
                 name: "screenshot.png".into(),
+                description: None,
                 start,
                 end,
                 payload: None,
