@@ -1036,6 +1036,19 @@
       "g_ref": "G-489/G-490/G-564",
       "adjudicated_by": "controller",
       "adjudicated_at": "2026-11-28"
+    },
+    {
+      "id": "tl-toolloop-timing",
+      "scenario_pattern": "tl",
+      "state_pattern": "toolloop",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "(?:__MS__|__SECS__)"
+        ]
+      },
+      "classification": "framework-diff",
+      "justification": "ADJUDICATED (controller 2026-11-28): capture skew across the 1s duration-unit boundary — the first va22a merge-gate export (13:44, under the 4-way gate load) showed ref __SECS__ vs rust __MS__ on the statusline (line 28), while the same product code exported EXACT at 13:23 (the lane's gate) and at 14:13:42 (the re-run gate, tree 19ba351e). Same signature as w13-perm-always-timing / w13-perm-once-timing. Re-open as a real gap only if the shape reproduces at settled quiescence."
     }
   ]
 }
