@@ -951,7 +951,7 @@ impl FooterPane {
     /// [`FooterMenuState`] so the window offset follows the selection
     /// (`menu.move`/`menu.reveal`, footer.menu.tsx:60-65).
     fn press_panel(&mut self, key: FooterKey) -> Vec<FooterEffect> {
-        use crate::components::footer::state::{move_selection_clamp, reconcile_selection};
+        use crate::components::footer::state::reconcile_selection;
         use crate::components::footer::panel::footer_panel_layout;
         let mut effects = Vec::new();
         let count = self.panel_entries().len();

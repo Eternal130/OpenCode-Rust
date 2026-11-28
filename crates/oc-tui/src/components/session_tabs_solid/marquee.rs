@@ -60,6 +60,10 @@ pub fn marquee_overflows(value: &str, width: usize) -> bool {
 /// `marqueeText`, util/marquee.ts:19-23). Offsets ≤ 0 (and fitting
 /// titles) render the truncated head, no loop.
 #[must_use]
+// The ref's `marqueeText` (util/marquee.ts:19-23) — the joined-window
+// API; the strip painter consumes the PARTS (G-502①), so the joined
+// form is the tests' seam.
+#[allow(dead_code)]
 pub fn marquee_text(value: &str, width: usize, offset: usize) -> String {
     marquee_text_parts(value, width, offset)
         .iter()
