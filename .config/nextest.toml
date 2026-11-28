@@ -128,5 +128,19 @@ test-threads = 1
 # (bakes the --test-threads 2 lesson in so lanes cannot forget it).
 test-threads = 2
 
+# 2026-11-28 (controller): binary(spec_e1_canary) rides this exclusion
+# too. e1_stall_canary is a WALL-CLOCK test — real flush gaps of the
+# in-process TUI against a 150 ms threshold — and under the 4-way gate it
+# read CFS contention as "natural stall-bursts": first-try red in 3 of 12
+# gates before va22a (carried by the retry; the `e1_canary` whitelist
+# entry), BOTH tries in the va22a gate, while the same tree is green
+# 8/8 solo. It runs in the gate's SOLO timing segment instead — the same
+# assertion, a quiet scope (≈11 s):
+#   tools/dev-gate.sh 'cargo nextest run -p oc-tui --locked --test spec_e1_canary --profile pty'
+# (CI mirrors this: its main step excludes the binary and a solo step
+# runs it.) A same-process "blackout witness" attribution was tried and
+# FAILED stress validation — under sustained contention the TUI and PTY
+# reader threads are starved per-thread, which a cheap witness thread
+# cannot see (3/3 stress rounds still first-try red) — do not retry it.
 [profile.merge]
-default-filter = 'not(binary(realchain_va17) or binary(realchain_va18) or binary(realchain_va19) or binary(realchain_va20) or binary(realchain_v21) or binary(realchain_v21b) or binary(realchain_v21c) or binary(realchain_v21d) or binary(realchain_v21e) or binary(realchain_v21f) or binary(realchain_v21g) or binary(realchain_v22a))'
+default-filter = 'not(binary(realchain_va17) or binary(realchain_va18) or binary(realchain_va19) or binary(realchain_va20) or binary(realchain_v21) or binary(realchain_v21b) or binary(realchain_v21c) or binary(realchain_v21d) or binary(realchain_v21e) or binary(realchain_v21f) or binary(realchain_v21g) or binary(realchain_v22a) or binary(spec_e1_canary))'

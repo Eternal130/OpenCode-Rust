@@ -282,12 +282,23 @@ jobs:
         # warns "ignoring unknown configuration key: profile.default.env"
         # (.config/nextest.toml) — the profile env table does not apply
         # on runners, so enforce it here.
-        run: cargo nextest run --archive-file nextest.tar.zst --extract-to . --extract-overwrite --workspace-remap . --no-fail-fast --retries 2 -E 'not (test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz) or test(vt_hover) or test(vt_temporal) or test(pty_d3) or binary(pty_daily) or binary(pty_form) or binary(pty_permission) or binary(pty_session_panel))'
+        run: cargo nextest run --archive-file nextest.tar.zst --extract-to . --extract-overwrite --workspace-remap . --no-fail-fast --retries 2 -E 'not (test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz) or test(vt_hover) or test(vt_temporal) or test(pty_d3) or binary(pty_daily) or binary(pty_form) or binary(pty_permission) or binary(pty_session_panel) or binary(spec_e1_canary))'
         # Channel 9 realchain_t9 rides THIS job (its tests match no pty
         # exclusion pattern; the harness self-serializes via its
         # cross-process lane lock and drives its own PTYs). The ref-side
         # realchain_pair tests also ride here and SKIP (ref checkout +
         # pinned bun absent — ref_lane_skip_reason, W4).
+        env:
+          OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
+
+      - name: Run the wall-clock timing test solo (spec_e1_canary)
+        # 2026-11-28: e1_stall_canary measures the in-process TUI's real
+        # flush gaps against a 150 ms threshold. Under the 4-way main step
+        # it read CFS contention as "natural stall-bursts" (a whitelisted
+        # retry-pass flake); it runs alone instead — the same assertion in
+        # a quiet scope. Mirrors the local merge profile's exclusion + the
+        # solo timing segment (.config/nextest.toml).
+        run: cargo nextest run --archive-file nextest.tar.zst --extract-to . --extract-overwrite --workspace-remap . --profile pty -E 'binary(spec_e1_canary)'
         env:
           OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
 

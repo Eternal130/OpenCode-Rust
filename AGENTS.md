@@ -36,6 +36,8 @@ Wrap exactly one cargo command per invocation. Verification scripts (`tools/diff
 | Workspace gate | `tools/dev-gate.sh 'cargo nextest run --workspace --locked --no-fail-fast'` | required at closure |
 | PTY family | the above + `--profile pty` | serialized test-threads=1, ~28min |
 
+**Solo timing segment** (2026-11-28): the merge profile excludes `binary(spec_e1_canary)` — `e1_stall_canary` is a wall-clock test (the in-process TUI's real flush gaps vs a 150 ms threshold) that reads 4-way CPU contention as "natural stall-bursts". Run it on its own after the gate: `tools/dev-gate.sh 'cargo nextest run -p oc-tui --locked --test spec_e1_canary --profile pty'` (≈11 s). CI mirrors this with a solo step.
+
 First round unfiltered + `--no-fail-fast`; red tests are re-run in the same round with `--exact <name> -- --nocapture` to capture output; the flake whitelist lives in GAPS §2.2#4 (retry-passes = not a regression; never loosen it on your own).
 
 ### 3. realchain battery (five targets) + adjudication checker
