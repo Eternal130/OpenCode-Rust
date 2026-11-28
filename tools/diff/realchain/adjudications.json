@@ -1062,6 +1062,22 @@
       },
       "classification": "pending-fix",
       "justification": "ADJUDICATED (controller 2026-11-28): va21h's resume-agent anchor (the va19sub two-phase re-export pattern — the v21g-rs precedent). Every residual row is the registered mini-frontend family: G-490 (the model group 'replay/claude-opus-4-7' vs 'claude-opus-4-7', the provider group 'replay' vs 'Replay Anthropic') and G-489 (the composer/statusline seating offset — the `┃` rows and the statusline rows shifted between the two ends). The agent face itself is EXACT on both ends in all three states (first-turn-settled / resume-settled / resume-second-turn read 'Plan'; the pre-fix port read 'Build') — 'Build' is deliberately NOT in this entry's shape, so a regression to it resurfaces as un-adjudicated. Before/after divergence counts 5→5 and 4→4; the third state is new (R30's un-anchored \"a new turn on --continue\"). Frame evidence: .test-logs/diff-reports/v21h-rs-*.txt"
+    },
+    {
+      "id": "geom160-home-hints-indented-midstream",
+      "scenario_pattern": "geom160",
+      "state_pattern": "home",
+      "shape": {
+        "kind": "regex",
+        "ref_contains": [
+          "t9w1...-geom160ref/project"
+        ]
+      },
+      "classification": "needs-controller",
+      "justification": "CONTROLLER 2026-11-28 (first sighting — the st579 post-merge merge-profile gate, 19:07): the REF end's footer hints row was captured at the composer block's indent (47 columns) with the project path truncated to three ASCII dots and double-space gaps — a third observed REF frame at this capture-the-instant state (the usual phase has an empty composer-border row = geom160-home-footer-midstream; the 19:14 anchors-profile re-export carried the statusline group on BOTH ends = EXACT). The rust frame was identical in all four of today's exports on identical product code (no product change since 15:10). Frame evidence: .test-logs/t9-pair-geom160-home-{ref,rust}-1795864038.txt (this frame), -1795864459.txt (EXACT), -1795862289.txt (the usual phase); the report copy /tmp/opencode/geom160-home-1907.txt. Mechanism NOT yet established — tracked under DIVERGENCES G-599 and the w13 stability diagnosis: a visible ref layout phase the port lacks (then re-classify as a product gap), a ref-inherent glitch frame (class ②), or a rig artifact (a stale cell range of the boot-1 TUI). Re-classify when the diagnosis lands. Until then this entry keeps the row out of the merge-red channel WITHOUT claiming a mechanism; the checker only lists its id among the adjudicated entries, so the tracking lives in DIVERGENCES G-599 — do not read this entry as a cleared row.",
+      "g_ref": "st579 post-merge gate export 2026-11-28 19:07",
+      "adjudicated_by": "controller",
+      "adjudicated_at": "2026-11-28"
     }
   ]
 }
