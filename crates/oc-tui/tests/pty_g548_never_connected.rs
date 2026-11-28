@@ -72,8 +72,9 @@ fn never_connected_sessions_dialog_stays_connecting() {
             // Pre-dialog sanity: never-connected alone must NOT surface
             // the overlay (the W6 gate — this held pre-fix too).
             if raw_contains(&driver, LOST_OVERLAY_NEEDLE) {
-                return Err("the overlay painted BEFORE the sessions dialog (W6 gate broken)"
-                    .to_owned());
+                return Err(
+                    "the overlay painted BEFORE the sessions dialog (W6 gate broken)".to_owned()
+                );
             }
             // Open the Sessions dialog (`ctrl+x l`): the mount sync
             // dispatches `session.list` through the loop fetcher —
@@ -105,8 +106,9 @@ fn never_connected_sessions_dialog_stays_connecting() {
             // Alive + still its normal presentation: the dialog rows
             // are still on the grid (the app kept rendering).
             let grid = driver.grid_now();
-            let listed = (0..grid.rows)
-                .any(|row| grid.row_text(row).contains("Alpha") || grid.row_text(row).contains("Sessions"));
+            let listed = (0..grid.rows).any(|row| {
+                grid.row_text(row).contains("Alpha") || grid.row_text(row).contains("Sessions")
+            });
             if !listed {
                 return Err("the sessions dialog vanished after the settle (app dead?)".to_owned());
             }
