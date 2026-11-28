@@ -94,6 +94,15 @@ pub struct App {
     /// multi-click counter's "same renderable" gate,
     /// renderer.ts:4981 `renderable.num === last.renderableId`).
     selection_last_region: Option<crate::store::SelectableRegionKind>,
+    /// G-596 — the multi-click window's clock override for unit tests
+    /// (pin the sampled instant); `None` = the live path samples the
+    /// real wall clock at dispatch. The sample must NOT ride the
+    /// store clock: `advance_clock` only moves at the run loop's
+    /// >= 100 ms ticks, so a store-clock sample under-counts a press
+    /// interval by up to one tick spacing under load and fires
+    /// double/triple-click classifications the ref (which reads the
+    /// real clock at dispatch) would not.
+    selection_clock_override: Option<u64>,
     /// TUI-16 — the last drawn frame (the selection's text source).
     pub last_frame: Option<crate::render::Frame>,
     /// TUI-16 — `terminal.copy` (select/manual).
@@ -230,6 +239,7 @@ impl App {
             selection_last_press: None,
             selection_click_count: 0,
             selection_last_region: None,
+            selection_clock_override: None,
             last_frame: None,
             copy_behavior: crate::config::CopyBehavior::default(),
             keymap: Keymap::new(),
@@ -565,6 +575,19 @@ impl App {
         }
     }
 
+    /// G-596 — the multi-click window's clock sample: the DISPATCH
+    /// time, never the tick-sampled store time. The ref reads the
+    /// real clock at dispatch (`nextClickBehavior`,
+    /// renderer.ts:4976 — `SystemClock` = performance.now(),
+    /// lib/clock.ts:11-19); the port's store clock only moves when
+    /// the run loop's tick block calls `advance_clock` (>= 100 ms
+    /// cadence), so under load it under-counts a press interval by
+    /// up to one tick spacing and arms double/triple-clicks the ref
+    /// would not. The override is the unit tests' injectable pin.
+    fn selection_dispatch_now_ms(&self) -> u64 {
+        self.selection_clock_override.unwrap_or_else(system_now_ms)
+    }
+
     /// G-457 — the multi-click count for one left press (the
     /// renderer's `nextClickBehavior` input, renderer.ts:4975-4986):
     /// rapid presses within 500 ms increment the count — 1 = cell, 2 =
@@ -583,13 +606,18 @@ impl App {
         row: usize,
         region: crate::store::SelectableRegionKind,
     ) -> u32 {
-        // G-457 rework: read the STORE clock — `self.clock`
-        // (ManualClock) only advances in unit tests; frozen at 0 in
-        // the live loop it classified EVERY same-cell press as a
-        // rapid double-click (the transcript disclosure toggle's
-        // second click became a word-select copy). The store clock
-        // is the live path's only advancing time base.
-        let now_ms = self.store.clock();
+        // G-596, the clock domain in three steps: (1) the original
+        // port read the App's ManualClock — frozen at 0 in the live
+        // loop it classified EVERY same-cell press as a rapid
+        // double-click (the transcript disclosure toggle's second
+        // click became a word-select copy — the G-457 bug); (2) the
+        // G-457 rework moved to the STORE clock, the live path's
+        // only advancing time base — but tick-sampled, so under load
+        // it under-counts a press interval by up to one tick spacing
+        // and fires classifications the ref would not (the w11
+        // harness amplifier); (3) the ref's domain restored — the
+        // real clock read AT DISPATCH (renderer.ts:4976).
+        let now_ms = self.selection_dispatch_now_ms();
         let rapid = self.selection_last_press.is_some_and(|(at, x, y)| {
             now_ms.saturating_sub(at) <= 500
                 && x.abs_diff(col).max(y.abs_diff(row)) <= 1
@@ -17104,6 +17132,64 @@ fn multiclick_tolerance_and_cap() {
     // Distance 2 restarts.
     press(&mut app, 13, 4);
     assert_eq!(app.selection_click_count, 1, "chebyshev 2 restarts the count");
+}
+
+/// G-596 — the multi-click window's clock domain: the window rides
+/// the DISPATCH-time clock, never the tick-sampled store clock. The
+/// ref reads the real clock at dispatch (renderer.ts:4976); the
+/// port's store clock only moves at the run loop's `advance_clock`
+/// ticks (>= 100 ms cadence), so a store-clock sample under-counts
+/// a press interval by up to one tick spacing under load — the w11
+/// amplifier (a ~535-600 ms same-cell re-press read as a
+/// double-click). The injectable override pins the sampled
+/// instants: delta 500 ms (the inclusive edge) continues the count,
+/// delta 501 ms restarts it, and store ticks moving 10 s between
+/// the presses change NEITHER classification.
+#[cfg(test)]
+#[test]
+fn multiclick_window_reads_the_dispatch_clock() {
+    use crate::input_term::{MouseButton, MouseEventKind};
+    let mut app = selection_app();
+    let press = |app: &mut App, col: u16, row: u16| {
+        app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), col, row));
+        app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), col, row));
+    };
+    // Delta 500 — the window's inclusive edge: the count continues
+    // while the store clock jumps 90 s PAST both instants (the old
+    // domain measured this pair 90,000 ms apart and restarted it).
+    app.selection_clock_override = Some(10_000);
+    press(&mut app, 10, 3);
+    app.store.advance_clock(100_000);
+    app.selection_clock_override = Some(10_500);
+    press(&mut app, 10, 3);
+    assert_eq!(
+        app.selection_click_count, 2,
+        "delta 500 ms on the dispatch clock continues the count"
+    );
+    // Delta 501 — one past the edge: the count restarts while the
+    // store clock sits at its tick (the old domain measured delta 0
+    // and classified a rapid pair).
+    app.selection_clock_override = Some(20_000);
+    press(&mut app, 10, 3);
+    app.selection_clock_override = Some(20_501);
+    press(&mut app, 10, 3);
+    assert_eq!(
+        app.selection_click_count, 1,
+        "delta 501 ms on the dispatch clock restarts the count"
+    );
+    // The store clock never influences the classification: a 10 s
+    // store tick between two dispatch-pinned presses 400 ms apart
+    // must not break the genuine rapid pair.
+    let mut app = selection_app();
+    app.selection_clock_override = Some(30_000);
+    press(&mut app, 10, 3);
+    app.store.advance_clock(40_000);
+    app.selection_clock_override = Some(30_400);
+    press(&mut app, 10, 3);
+    assert_eq!(
+        app.selection_click_count, 2,
+        "a 10 s store tick must not break a genuine 400 ms rapid pair"
+    );
 }
 
 /// G-468① — the selectable-scope gate (renderer.ts:3684-3699

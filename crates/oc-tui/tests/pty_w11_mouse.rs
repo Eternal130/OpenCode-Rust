@@ -311,37 +311,39 @@ fn mouse_scenario(driver: &mut HarnessHandle) -> Result<(), String> {
                 .to_owned());
         }
         // The NEXT PLAIN PRESS clears it (startSelection's clear,
-        // renderer.ts:4967): press again on the drag's anchor cell (a
-        // fresh transcript cell, seconds later — no multi-click
-        // window), then release — the highlight drops with the press.
-        driver.sgr_press(u16::try_from(x0).unwrap_or(0), u16::try_from(y0).unwrap_or(0));
-        // va15 T3 hardening — the clear wait is EVENTIZED (two load
-        // flakes pinned this exact window: va12's gate TRY1, va14's
-        // closure TRY2 — "the kept highlight never cleared on the
-        // next press"; isolated runs always green): the O(1) screen
-        // digest (captured BEFORE the press) gates the full-grid
-        // materialization — va10's lesson was that full-grid clone
-        // polling starves the render thread under load, so the
-        // expensive Grid check runs only after the press's repaint
-        // actually moved the screen. Assertion unchanged: the next
-        // press MUST clear the kept highlight.
+        // renderer.ts:4967). G-590: the press lands on the rect's FAR
+        // CORNER — (x1, y1), inside the old rect, Chebyshev distance
+        // max(|x1-x0|, |y1-y0|) >= 2 from the FIRST press — so the
+        // multi-click window's distance gate (app.rs
+        // next_selection_click: only Chebyshev <= 1 continues the
+        // count) classifies it as a plain press TIMING-FREE. The old
+        // same-cell (x0, y0) re-press sat ~535-600 ms out; under load
+        // the then tick-sampled store clock (G-596) under-counted the
+        // interval into the 500 ms window, the count-2 press armed a
+        // WORD selection on the press itself (selection.rs press())
+        // that replaced the kept rect, and the clear predicate below
+        // was UNSATISFIABLE — every field failure sat at deadline +
+        // 3.5-3.7 s across the whole 8/20/40 s deadline ladder (the
+        // retired va15/va16/2026-11-26 deadline notes misread that as
+        // load latency). Release follows on the same corner cell.
         let pre_press_digest = driver.grid_digest();
-        // 20s deadline (va16 T3, third sighting): post-va15-merge TRY1 hit
-        // 11.5s against the old 8s deadline under serialized external load
-        // — pure load latency, retry/serialized passes green (watchlist
-        // entry, GAPS 2.2#4 w11 press-clear note). Same widening budget
-        // precedent as va10's RL-T5 drive_with_budget 60s. Assertion
+        driver.sgr_press(u16::try_from(x1).unwrap_or(79), u16::try_from(y1).unwrap_or(29));
+        // va15 T3 hardening — the clear wait is EVENTIZED: the O(1)
+        // screen digest (captured BEFORE the press write — G-590
+        // moved it above the write so the press's own repaint is the
+        // digest change, never a pre-press frame) gates the
+        // full-grid materialization — va10's lesson was that
+        // full-grid clone polling starves the render thread under
+        // load, so the expensive Grid check runs only after the
+        // press's repaint actually moved the screen. Assertion
         // unchanged: the next press MUST clear the kept highlight.
-        // 40s deadline (2026-11-26 fourth sighting, CI run 45825001675):
-        // the post-va21d CI showed TRY 3×FAIL at a flat 23.7s (the 20s
-        // window + overhead) on the 2-core runner under 4-way parallel
-        // load — while the SAME tree passes serialized in 8.6s
-        // (`.test-logs/oc-tui-20261126-*-ci-red-w11-serialized.log`) and
-        // locally TRY2-passes. Pure parallel-load latency, not a
-        // regression: the press's repaint occasionally lands past the
-        // window under contention. Same widening budget precedent as
-        // va16 T3 (8s→20s on the third sighting). Assertion unchanged.
-        let deadline = std::time::Instant::now() + Duration::from_secs(40);
+        // 8s deadline — the G-590 root cause retired the widening
+        // ladder (8s -> 20s -> 40s, the va16 T3 / 2026-11-26 notes):
+        // every one of those sightings was the same-cell re-press's
+        // unsatisfiable predicate burning the window, not repaint
+        // latency; with the distance-2 press the wait only covers
+        // the press's clear repaint (the pre-ladder 8s form).
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
         let cleared = loop {
             if driver.grid_digest() != pre_press_digest {
                 let g = driver.grid_now();
@@ -359,9 +361,19 @@ fn mouse_scenario(driver: &mut HarnessHandle) -> Result<(), String> {
             std::thread::sleep(Duration::from_millis(10));
         };
         if !cleared {
-            return Err("the kept highlight never cleared on the next press".to_owned());
+            let g = driver.grid_now();
+            let still_flipped: Vec<(usize, usize)> = inside_cells
+                .iter()
+                .filter(|&&(x, y)| style_at(&g, x, y) != style_at(&baseline, x, y))
+                .copied()
+                .collect();
+            let row_y0 = g.row_text(y0);
+            return Err(format!(
+                "the kept highlight never cleared on the next press — still-flipped cells: \
+                 {still_flipped:?}; row y0 text: {row_y0:?}"
+            ));
         }
-        driver.sgr_release(u16::try_from(x0).unwrap_or(0), u16::try_from(y0).unwrap_or(0));
+        driver.sgr_release(u16::try_from(x1).unwrap_or(79), u16::try_from(y1).unwrap_or(29));
         // And the toast eventually retires.
         if !wait_row_gone(driver, "Copied to clipboard", Duration::from_secs(8)) {
             return Err("the Copied toast never retired".to_owned());
