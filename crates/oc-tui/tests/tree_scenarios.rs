@@ -217,6 +217,16 @@ fn states() -> Vec<StateSpec> {
             source: "chrome all on — tabs rail (2 sessions) + transcript + toast + devtools bar",
             mount: Mount::App(|store| {
                 boot_session(store);
+                // Controller ruling 2026-11-28 (option (a), the G-548
+                // follow-up): this scenario models a CONNECTED app —
+                // seed the sanctioned handshake writer so the devtools
+                // bar reads `sse=connected` through the marker, the
+                // same way the live loop reaches it (the pre-fix
+                // golden's `connected` came from the Resync arm's
+                // flip — the exact bug G-548 removed). boot_session
+                // itself stays untouched: the other scenarios share it
+                // and their trees never read the connection state.
+                store.ingest_all([Ingest::Connected]);
                 store.ingest_all([Ingest::Resync {
                     sessions: vec![
                         SessionSnapshot {
