@@ -444,17 +444,6 @@ async fn emit_g221_script(tx: &tokio::sync::broadcast::Sender<String>) {
     // Phase 1 — the admit echo + the two scripted rows queue: the
     // dock's count reaches 3.
     event("session.execution.started", session.clone());
-    // G-579 POTENCY KNOB — TEMPORARY (removed before the final
-    // commit): a forced split between the phase-1 frames 1 and 2 so
-    // the first running paint lands mid-phase (the count at 1, the
-    // later change to 3 as one cell) — the exact race the reorder
-    // fixes, made deterministic for the proof runs.
-    if let Some(split) = std::env::var("OC_MINI_PTY_SPLIT_MS")
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-    {
-        tokio::time::sleep(Duration::from_millis(split)).await;
-    }
     event(
         "session.inbox.enqueued",
         serde_json::json!({
