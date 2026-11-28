@@ -80,6 +80,12 @@ impl AttachmentPayload {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileMention {
     pub name: String,
+    /// G-504 — the wire `PromptInput.FileAttachment.description`
+    /// (codec.ts:17 round-trips it; the identity key
+    /// `JSON.stringify([name, description, mention.text])` + payload
+    /// reads it, prompt/attachment.ts:45). `None` for every
+    /// TUI-staged attachment (the paste path carries no description).
+    pub description: Option<String>,
     /// Char index of the first mention character in `PromptDraft::text`.
     pub start: usize,
     /// Char index one past the last mention character.
@@ -309,6 +315,7 @@ impl HistoryEntry {
                         let (start, end) = range(item)?;
                         Some(FileMention {
                             name,
+                            description: None,
                             start,
                             end,
                             payload: None,
@@ -1247,6 +1254,7 @@ impl Composer {
         let end = start + label.chars().count();
         self.draft.files.push(FileMention {
             name: filename.unwrap_or("file").to_owned(),
+            description: None,
             start,
             end,
             payload,
@@ -1662,6 +1670,7 @@ impl Composer {
             }
             None => self.draft.files.push(FileMention {
                 name: name.to_owned(),
+                description: None,
                 start: index,
                 end,
                 payload: None,
@@ -1793,6 +1802,7 @@ impl Composer {
                             }
                             None => self.draft.files.push(FileMention {
                                 name: name.clone(),
+                                description: None,
                                 start,
                                 end,
                                 payload: None,
@@ -1928,6 +1938,7 @@ mod tests {
             text: "check @a.rs and @build".to_owned(),
             files: vec![FileMention {
                 name: "@a.rs".to_owned(),
+                description: None,
                 start: 6,
                 end: 11,
                 payload: None,
@@ -2274,6 +2285,7 @@ mod tests {
             text: text.to_owned(),
             files: vec![FileMention {
                 name: "screenshot.png".into(),
+                description: None,
                 start: text[..start].chars().count(),
                 end: text[..end].chars().count(),
                 payload: None,
@@ -2324,6 +2336,7 @@ mod tests {
         let mut state = composer("look ");
         state.draft.files.push(FileMention {
             name: "shot.png".into(),
+            description: None,
             start: 5,
             end: 14,
             payload: None,
@@ -2437,6 +2450,7 @@ mod tests {
             text: "prior run".into(),
             files: vec![FileMention {
                 name: "a.png".into(),
+                description: None,
                 start: 10,
                 end: 16,
                 payload: None,
@@ -2491,6 +2505,7 @@ mod tests {
         let mut state = composer("x");
         state.draft.files.push(FileMention {
             name: "a.png".into(),
+            description: None,
             start: 1,
             end: 1,
             payload: None,

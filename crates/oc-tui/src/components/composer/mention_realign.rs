@@ -310,6 +310,7 @@ mod tests {
             text: "hi @build".to_owned(),
             files: vec![FileMention {
                 name: "a.ts".to_owned(),
+                description: None,
                 start: 0,
                 end: 0,
                 payload: None,

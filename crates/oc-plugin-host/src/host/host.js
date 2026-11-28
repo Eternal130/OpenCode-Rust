@@ -1044,6 +1044,31 @@ async function registerHook(pluginId, domain, name, handlers) {
 const dialogProviders = new Map();
 
 // ---------------------------------------------------------------------------
+// G-518 — the ACTIVE `dialog.show` render (the live-children projection):
+// the ref mounts the show's render tree RAW as the Dialog's children
+// (ui/dialog.tsx:242-246 `{value.stack.at(-1)!.element}`), so a
+// `dialog.set({size})` widens the box and the CHILDREN RE-LAYOUT at the
+// new width (the space-between rows re-flow, api.tsx:337-340 →
+// dialog.tsx:14-18/64-69). The port's bounded projection flattens to
+// rows ONCE at show time; the re-flow re-runs the SAME render at the
+// new box width on every set. The registry holds the LAST show's
+// render (show replaces the stack, dialog.tsx:170-189 — any later
+// dialog kind replaces it too, so the TUI-side "active show" guard
+// (store: the top dialog is the plugin show) is the authority on
+// whether the re-flattened rows apply).
+// ---------------------------------------------------------------------------
+
+/** @type {{ pluginId: string, render: () => object } | null} */
+let activeShowRender = null;
+
+/** `dialogWidth` (ui/dialog.tsx:14-18): the box width per size. */
+function dialogWidth(size) {
+  if (size === "xlarge") return 116;
+  if (size === "large") return 88;
+  return 60;
+}
+
+// ---------------------------------------------------------------------------
 // The Context
 // ---------------------------------------------------------------------------
 
@@ -2667,29 +2692,56 @@ function makeCtx(pluginId, options) {
           }
           const lines = treeLines(render(), 60)
             .map((line) => line.replace(/\s+$/, ""));
+          // G-518 — remember the ACTIVE show's render (the live
+          // children): every later `dialog.set` re-flattens at the
+          // live box width (the ref's children re-layout).
+          activeShowRender = { pluginId, render };
           const request = hostRequest("ui.dialog.show", {
             pluginId,
             spec: { title: "", rows: lines },
           });
-          if (typeof onClose === "function") {
-            request.then(
-              () => onClose(),
-              () => {},
-            );
-          }
+          request.then(
+            () => {
+              // The dialog closed: the live children are gone.
+              if (
+                activeShowRender &&
+                activeShowRender.pluginId === pluginId &&
+                activeShowRender.render === render
+              ) {
+                activeShowRender = null;
+              }
+              if (typeof onClose === "function") {
+                onClose();
+              }
+            },
+            () => {},
+          );
         },
         /** G-475 — `dialog.set(options)` (api.tsx:337-340): the ACTIVE
-         *  dialog's presentation (`size`/`centered`). */
+         *  dialog's presentation (`size`/`centered`). G-518: with an
+         *  active show render the re-flattened rows ride the request
+         *  (the ref's children re-flow at the new box width — the
+         *  TUI applies them when the top dialog is that show). */
         async set(options) {
           const opts = options ?? {};
+          let showRows;
+          if (activeShowRender) {
+            const width = dialogWidth(typeof opts.size === "string" ? opts.size : "medium");
+            showRows = treeLines(activeShowRender.render(), width)
+              .map((line) => line.replace(/\s+$/, ""));
+          }
           await hostRequest("ui.dialog.set", {
             pluginId,
             size: typeof opts.size === "string" ? opts.size : null,
             centered: opts.centered === true,
+            showRows,
           });
         },
         /** G-475 — `dialog.clear()` (api.tsx:341-343). */
         async clear() {
+          // G-518 — clear empties the stack (dialog.tsx:159-169): the
+          // show's live children are gone.
+          activeShowRender = null;
           await hostRequest("ui.dialog.clear", { pluginId });
         },
         /** G-475 — `dialog.select(options)` (api.tsx:387-427): the

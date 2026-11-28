@@ -1572,9 +1572,13 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
             size: spec.size.clone(),
             centered: spec.centered,
         },
-        UiRequest::DialogSet { size, centered, .. } => {
-            PluginUiEvent::DialogSet { size: size.clone(), centered: *centered }
-        }
+        // G-518 — the re-flattened ACTIVE-show rows ride the set (the
+        // host re-ran the show's render at the new box width).
+        UiRequest::DialogSet { size, centered, show_rows, .. } => PluginUiEvent::DialogSet {
+            size: size.clone(),
+            centered: *centered,
+            show_rows: show_rows.clone(),
+        },
         UiRequest::DialogClear { .. } => PluginUiEvent::DialogClear,
         // G-475 — the dialog.select face (the value promise + the
         // footer-action rows; G-522 — the search marker).

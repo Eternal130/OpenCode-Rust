@@ -125,14 +125,38 @@ fn spinner_frame(elapsed_ms: u64) -> char {
 /// directly under the headline), the copy row's tail past the clamped
 /// right edge keeps the DIMMED background (the old paste loop never
 /// reached it).
+///
+/// G-500 — the centering rounding: the ref's Yoga rounds the box's
+/// EDGES half-up (`roundLayoutResultsToPixelGrid`; proven
+/// empirically with the ref's own yoga.js: H=36→top 16, H=37→16,
+/// H=38→17 — the .5 case rounds UP), and the box's width follows the
+/// ROUNDED edges. For an integer box width (the 48 clamp at W ≥ 54)
+/// the left/top reduce to `div_ceil(2)`; for the fractional 90% clamp
+/// (W < 54, not a multiple of 10) the edge model is the only faithful
+/// one — at W=49: w_raw 44.1, x 2.45 → edges [2, 47] → width 45 (the
+/// old floor port computed 44 one narrower, its box one row/col high
+/// — the G-477 residue).
 #[must_use]
 pub(crate) fn reconnecting_geometry(width: usize, height: usize) -> (usize, usize, usize, usize) {
-    let box_width = 48.min(width.saturating_mul(9) / 10).max(3);
-    let left = width.saturating_sub(box_width) / 2;
-    let top = height.saturating_sub(5) / 2;
+    #[allow(clippy::cast_precision_loss)] // terminal-bounded geometry
+    let term_width = f64::from(u32::try_from(width).unwrap_or(u32::MAX));
+    let w_raw = 48.0_f64.min(term_width * 0.9).max(3.0);
+    let x_raw = (term_width - w_raw) / 2.0;
+    let left = round_half_up(x_raw);
+    let right = round_half_up(x_raw + w_raw);
+    let box_width = (right - left).max(1);
+    let top_raw = (f64::from(u32::try_from(height).unwrap_or(u32::MAX)) - 5.0) / 2.0;
+    let top = round_half_up(top_raw).max(0);
     let w = box_width.min(width.saturating_sub(left));
     let h = 5.min(height.saturating_sub(top));
     (left, top, w, h)
+}
+
+/// G-500 — Yoga's half-up pixel-grid rounding for a non-negative
+/// coordinate (`round(x)`).
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // geometry: non-negative, terminal-bounded
+fn round_half_up(value: f64) -> usize {
+    (value + 0.5).floor().max(0.0) as usize
 }
 
 /// Mount the reconnecting scrim + box into the shared tree (the

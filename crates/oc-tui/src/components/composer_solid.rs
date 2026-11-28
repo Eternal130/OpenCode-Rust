@@ -854,7 +854,14 @@ fn preview_strip_element(inputs: &Signal<ComposerInputs>, geo: &ComposerInputs) 
                 dyn_styled(map(fallback_inputs, move |i: &ComposerInputs| {
                     if i.preview_thumbs.get(index).is_some_and(Option::is_none) {
                         // Center the 11-wide label in the thumb box.
-                        let lead = i.preview_thumb_w.saturating_sub(11) / 2;
+                        // G-500 — the ref centers through Yoga
+                        // (`alignItems="center"` +
+                        // `justifyContent="center"`,
+                        // prompt/index.tsx:1704-1706), whose half-up
+                        // edge rounding makes the lead
+                        // `(w − 11).div_ceil(2)` — the floor split sat
+                        // one column left on odd remainders.
+                        let lead = i.preview_thumb_w.saturating_sub(11).div_ceil(2);
                         one(format!("{}No preview", " ".repeat(lead)), i.colors.muted)
                     } else {
                         styled(Vec::new())

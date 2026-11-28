@@ -4258,12 +4258,12 @@ mod d22_tests {
         // paddingTop height/4 = 9, box height 1 + 1 row = 2.
         assert_eq!(seat.rect, (16, 9, 88, 2));
         // set({size:"large"}) — the entry widens.
-        store.set_plugin_dialog_presentation(Some("large"), false);
+        store.set_plugin_dialog_presentation(Some("large"), false, None, "p.tui");
         let entry = store.dialogs().last().expect("the show entry").clone();
         let seat = mount_dialog_tree(&entry, &props, plugin.as_ref(), &theme, (120, 36), &sidecar);
         assert_eq!(seat.rect.2, 88, "the explicit large set applies");
         // set({centered:true}) with an ABSENT size — the medium reset.
-        store.set_plugin_dialog_presentation(None, true);
+        store.set_plugin_dialog_presentation(None, true, None, "p.tui");
         let entry = store.dialogs().last().expect("the show entry").clone();
         let seat = mount_dialog_tree(&entry, &props, plugin.as_ref(), &theme, (120, 36), &sidecar);
         assert_eq!(seat.rect.2, 60, "the absent size resets to medium (G-508)");

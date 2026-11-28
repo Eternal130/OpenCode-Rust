@@ -176,10 +176,13 @@ mod tests {
     /// G-477 — the box is the ref's FIVE rows (reconnecting.tsx:18-37:
     /// paddingTop 1 + headline + `gap={1}` + copy + paddingBottom 1 —
     /// the old 4-row port pasted the copy directly under the
-    /// headline). 60×12 centers the 5-row box at top 3: pad (3),
-    /// headline (4), empty raised gap row (5), copy (6), pad (7) — the
-    /// raised background spans all five, and the rows outside the box
-    /// keep the dimmed scrim color.
+    /// headline). 60×12 centers the 5-row box at top 4 — G-500
+    /// re-pin: the ref's Yoga rounds the top HALF-UP ((12−5)/2 = 3.5
+    /// → 4; H=36→16, H=37→16, H=38→17 — the register's empirical
+    /// probe), the old port floored to 3 one row high (the G-477
+    /// residue): pad (4), headline (5), empty raised gap row (6),
+    /// copy (7), pad (8) — the raised background spans all five, and
+    /// the rows outside the box keep the dimmed scrim color.
     #[test]
     fn reconnecting_box_is_five_rows_with_a_gap_row() {
         let styles = crate::theme::ThemeState::v2_dark().styles();
@@ -188,20 +191,30 @@ mod tests {
         let raised = CellColor::from(styles.background_raised);
         let dimmed = CellColor::Rgb(82, 82, 82);
         let rows = frame.text_grid();
-        assert_eq!(rows[3].trim(), "", "padTop row");
-        assert!(rows[4].contains("Connection lost…"), "headline row");
-        assert_eq!(rows[5].trim(), "", "the gap row is empty");
-        assert!(rows[6].contains("Reconnecting to the server automatically."), "copy row");
-        assert_eq!(rows[7].trim(), "", "padBottom row");
+        assert_eq!(rows[3].trim(), "", "above the box");
+        assert_eq!(rows[4].trim(), "", "padTop row");
+        assert!(rows[5].contains("Connection lost…"), "headline row");
+        assert_eq!(rows[6].trim(), "", "the gap row is empty");
+        assert!(rows[7].contains("Reconnecting to the server automatically."), "copy row");
+        assert_eq!(rows[8].trim(), "", "padBottom row");
         // The raised background covers the five rows (probe column 30 —
         // the box's centered interior), nothing above/below.
-        for y in 3..8 {
+        for y in 4..9 {
             assert_eq!(frame.cell(y, 30).bg, raised, "raised interior at row {y}");
         }
-        assert_eq!(frame.cell(2, 30).bg, dimmed, "above the box stays dimmed");
-        assert_eq!(frame.cell(8, 30).bg, dimmed, "below the box stays dimmed");
+        assert_eq!(frame.cell(3, 30).bg, dimmed, "above the box stays dimmed");
+        assert_eq!(frame.cell(9, 30).bg, dimmed, "below the box stays dimmed");
         // The geometry helper agrees.
         assert_eq!(super::super::overlays_solid::reconnecting_geometry(60, 12).3, 5);
+        assert_eq!(super::super::overlays_solid::reconnecting_geometry(60, 12).1, 4, "the half-up top");
+        // G-500 — the register's empirical probe points: H=36→16,
+        // H=37→16, H=38→17 (the .5 cases round UP), and the 90% clamp
+        // at W=49 rounds the width to 45 (the floor port computed 44).
+        assert_eq!(super::super::overlays_solid::reconnecting_geometry(60, 36).1, 16);
+        assert_eq!(super::super::overlays_solid::reconnecting_geometry(60, 37).1, 16);
+        assert_eq!(super::super::overlays_solid::reconnecting_geometry(60, 38).1, 17);
+        let (left, _top, w, _h) = super::super::overlays_solid::reconnecting_geometry(49, 36);
+        assert_eq!((left, w), (2, 45), "the 90% clamp edge-rounds to 45 wide at 2");
     }
 
     /// G-439 — the managed arm (`client.restart !== undefined`,

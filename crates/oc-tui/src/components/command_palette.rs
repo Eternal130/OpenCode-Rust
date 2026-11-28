@@ -4215,6 +4215,7 @@ pub fn append_prompt_payload(store: &Store, session_id: &str, payload: &crate::s
         text.push(' ');
         files.push(FileMention {
             name: "file".to_owned(),
+            description: None,
             start,
             end,
             payload: Some(attachment),

@@ -284,8 +284,17 @@ pub enum UiRequest {
     DialogShow { request_id: u64, plugin_id: String, spec: PluginDialogSpec },
     /// G-475 — `ctx.ui.dialog.set({size?, centered?})`
     /// (api.tsx:337-340 → setSize/setCentered): mutates the ACTIVE
-    /// dialog's presentation.
-    DialogSet { plugin_id: String, size: Option<String>, centered: bool },
+    /// dialog's presentation. G-518 — `show_rows` carries the
+    /// re-flattened ACTIVE-show rows (the host re-ran the show's
+    /// render at the new box width — the ref's live children re-flow
+    /// on `set`; the TUI applies them when the top dialog is that
+    /// plugin's show).
+    DialogSet {
+        plugin_id: String,
+        size: Option<String>,
+        centered: bool,
+        show_rows: Option<Vec<String>>,
+    },
     /// G-475 — `ctx.ui.dialog.clear()` (api.tsx:341-343 →
     /// dialog.clear): closes the active dialog.
     DialogClear { plugin_id: String },

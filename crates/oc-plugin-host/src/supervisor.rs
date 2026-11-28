@@ -2052,6 +2052,10 @@ fn answer_ui_runtime(shared: &Shared, id: u64, method: &str, params: &Value) -> 
         "ui.panel.close" => UiRequest::PanelClose { plugin_id },
         // G-475 — `ctx.ui.dialog.set({size?, centered?})`: mutates the
         // ACTIVE dialog's presentation (fire-and-forget on the queue).
+        // G-518 — `showRows` carries the re-flattened ACTIVE-show
+        // rows (the host re-ran the show's render at the new box
+        // width; the TUI applies them when the top dialog is that
+        // plugin show — the ref's live-children re-flow).
         "ui.dialog.set" => UiRequest::DialogSet {
             size: params
                 .get("size")
@@ -2059,6 +2063,11 @@ fn answer_ui_runtime(shared: &Shared, id: u64, method: &str, params: &Value) -> 
                 .filter(|size| matches!(*size, "medium" | "large" | "xlarge"))
                 .map(str::to_owned),
             centered: params.get("centered").and_then(Value::as_bool).unwrap_or(false),
+            show_rows: params.get("showRows").and_then(Value::as_array).map(|rows| {
+                rows.iter()
+                    .filter_map(|row| row.as_str().map(str::to_owned))
+                    .collect::<Vec<String>>()
+            }),
             plugin_id,
         },
         // G-475 — `ctx.ui.dialog.clear()`: closes the active dialog.

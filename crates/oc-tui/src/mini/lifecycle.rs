@@ -107,6 +107,20 @@ pub enum FooterKey {
     Tab,
     PageUp,
     PageDown,
+    /// G-498 — the panel controller's `home` (reveal 0,
+    /// footer.command.tsx:233-237).
+    Home,
+    /// G-498 — the panel controller's `end` (reveal ∞,
+    /// footer.command.tsx:239-243).
+    End,
+    /// G-498 — the panel controller's ctrl+n (move +1,
+    /// footer.command.tsx:215-219).
+    CtrlN,
+    /// G-498 — the panel controller's bare ctrl+u (query clear,
+    /// footer.command.tsx:254-257; the QUEUED panel's keymap layer
+    /// owns the same chord as `queued_prompt.undo`,
+    /// footer.command.tsx:975-999 + config/keybind.ts:132).
+    CtrlU,
     CtrlC,
     /// G-181① — `variant.cycle`'s ctrl+t (config/keybind.ts:174).
     CtrlT,
@@ -288,6 +302,14 @@ pub struct FooterPane {
     /// `NOTICE_DURATION = 3000` ms (footer.ts:120). The ref's notices
     /// NEVER touch the scrollback.
     pub notice: Option<(String, Instant)>,
+    /// G-498 — the last term height the pane laid out against
+    /// (`pane_height` sees it on every draw): the press-side panel
+    /// layout (`footerPanelLayout(renderer.terminalHeight, limit)`,
+    /// footer.command.tsx:155-159) reads the SAME height the render
+    /// does, so the page/home/end reveal steps match the drawn
+    /// window. 24 is the pre-first-draw fallback (a panel cannot be
+    /// open before the boot draw).
+    term_height: std::cell::Cell<usize>,
 }
 
 /// G-221 — `state.usage` (footer.view.tsx:213-218): the summed step
@@ -312,11 +334,15 @@ pub struct QueuedPromptView {
 }
 
 /// G-272 — the panel routes' shared search state (the `PanelShell`'s
-/// query + the select controller).
+/// query + the select controller). G-498 — the controller's WINDOW
+/// offset (`menu.offset`, footer.menu.tsx:35-76): up/down move it with
+/// the selection, page/home/end reveal through it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PanelState {
     pub query: String,
     pub selected: usize,
+    /// The visible window's first row (the `menu`'s offset).
+    pub offset: usize,
 }
 
 /// RD-19 — the launch row's state (`footer.view.tsx:709-725`): the
@@ -378,6 +404,7 @@ impl FooterPane {
             leader_armed: false,
             settings_summary: crate::components::footer::state::resolve_mini_settings(),
             notice: None,
+            term_height: std::cell::Cell::new(24),
         }
     }
 
@@ -490,6 +517,13 @@ impl FooterPane {
             FooterKey::Tab => "tab".to_owned(),
             FooterKey::PageUp => "pageup".to_owned(),
             FooterKey::PageDown => "pagedown".to_owned(),
+            // G-498 — the panel controller's extended key set (the
+            // name mapping keeps the permission arm's exhaustive
+            // match total).
+            FooterKey::Home => "home".to_owned(),
+            FooterKey::End => "end".to_owned(),
+            FooterKey::CtrlN => "ctrl+n".to_owned(),
+            FooterKey::CtrlU => "ctrl+u".to_owned(),
         };
         let mut effects = Vec::new();
         // The mini surface drives the same session-route two-stage
@@ -534,9 +568,15 @@ impl FooterPane {
             FooterKey::Down => state = form_move(&state, request, 1),
             // G-272 — the panel-family keys never reach a form body
             // (the blocker owns every key); consumed without effect.
+            // G-498 — the controller's extended set (home/end/ctrl+n/
+            // ctrl+u) joins the consumed list.
             FooterKey::CtrlP
             | FooterKey::CtrlX
             | FooterKey::CtrlB
+            | FooterKey::CtrlN
+            | FooterKey::CtrlU
+            | FooterKey::Home
+            | FooterKey::End
             | FooterKey::Left
             | FooterKey::Right => {}
             FooterKey::Enter => {
@@ -682,7 +722,13 @@ impl FooterPane {
                     effects.push(FooterEffect::Interrupt);
                 }
             }
-            FooterKey::Tab | FooterKey::PageUp | FooterKey::PageDown => {}
+            FooterKey::Tab
+            | FooterKey::PageUp
+            | FooterKey::PageDown
+            | FooterKey::Home
+            | FooterKey::End
+            | FooterKey::CtrlN
+            | FooterKey::CtrlU => {}
             // G-272 — `session.background` (ctrl+b,
             // config/keybind.ts:127): enabled on the composer route
             // while blocking subagent tools run foreground
@@ -889,10 +935,38 @@ impl FooterPane {
     /// up/down move through the FILTERED list, printables/backspace
     /// edit the query, ctrl+u clears it, enter runs the entry —
     /// footer.command.tsx:228-259).
+    ///
+    /// G-498 — the FULL searchable-panel controller key set
+    /// (footer.command.tsx:186-259, the shared controller behind the
+    /// command/agent/variant/settings/queued/subagent panels):
+    /// pageup/pagedown page-scroll `reveal(selected ± max(1,
+    /// limit−1))` (:221-231), home/end reveal 0/∞ (:233-243), ctrl+n
+    /// moves down (:215-219), ctrl+p-while-open moves UP (:209-213 —
+    /// the `command.palette.show` layer is composer-route-only,
+    /// footer.view.tsx:561-577, so the open panel's own handler owns
+    /// the chord), and bare ctrl+u clears the query (:254-257 — in
+    /// the QUEUED menu the panel's priority-1 keymap layer owns the
+    /// chord as `queued_prompt.undo`, footer.command.tsx:975-999 +
+    /// config/keybind.ts:132). The moves run through
+    /// [`FooterMenuState`] so the window offset follows the selection
+    /// (`menu.move`/`menu.reveal`, footer.menu.tsx:60-65).
     fn press_panel(&mut self, key: FooterKey) -> Vec<FooterEffect> {
         use crate::components::footer::state::{move_selection_clamp, reconcile_selection};
+        use crate::components::footer::panel::footer_panel_layout;
         let mut effects = Vec::new();
         let count = self.panel_entries().len();
+        // G-498 — the panel layout at the LIVE term height
+        // (`footerPanelLayout(renderer.terminalHeight, input.limit)`,
+        // footer.command.tsx:155-159): the subagent menu's list limit
+        // is SUBAGENT_LIST_ROWS (:898), every other panel's 10.
+        let list_limit = if self.machine.route
+            == crate::components::footer::PromptRoute::SubagentMenu
+        {
+            crate::components::footer::state::SUBAGENT_LIST_ROWS
+        } else {
+            crate::components::footer::state::PANEL_LIST_ROWS
+        };
+        let limit = footer_panel_layout(self.term_height.get(), list_limit).limit;
         // G-272 — the settings panel's change keys (`onKey`,
         // footer.command.tsx:818-824): left/right step the selected
         // row's value (enter = right's +1 via `onSelect: change`).
@@ -910,47 +984,86 @@ impl FooterPane {
         // row 0 CLOSES the panel (`closeOnFirstUp: true`, :196-200).
         let subagent_menu_route =
             self.machine.route == crate::components::footer::PromptRoute::SubagentMenu;
+        // G-498 — the controller's move/reveal pair (the `menu`
+        // state's own arms, footer.menu.tsx:60-65).
+        let mut menu =
+            crate::components::footer::panel::FooterMenuState {
+                selected: self.panel.selected,
+                offset: self.panel.offset,
+            };
         match key {
             FooterKey::Escape | FooterKey::CtrlC => {
                 // closePanel → the composer (footer.view.tsx:320-322).
                 self.machine.close_panel();
                 self.panel = PanelState::default();
             }
-            FooterKey::Up => {
-                // G-482 — `closeOnFirstUp` (footer.command.tsx:196-
-                // 200): the subagent menu closes on an up at the
-                // FIRST row (the panel opens from the composer below).
-                if subagent_menu_route && self.panel.selected == 0 {
+            FooterKey::Up | FooterKey::CtrlP => {
+                // G-498 — `up` and `ctrl+p` are the same arm
+                // (`name === "up" || (ctrl && name === "p")` →
+                // `menu.move(-1)`, footer.command.tsx:209-213): while
+                // a panel is OPEN the palette layer is disabled (the
+                // composer-route gate, footer.view.tsx:561-577), so
+                // ctrl+p moves the selection — it never re-opens.
+                // `closeOnFirstUp` (footer.command.tsx:196-200) fires
+                // on the BARE `up` only (:196 checks `name === "up"`)
+                // — the subagent menu closes on an up at the FIRST
+                // row, ctrl+p clamps at 0 instead.
+                if key == FooterKey::Up && subagent_menu_route && self.panel.selected == 0 {
                     self.machine.close_panel();
                     self.panel = PanelState::default();
                 } else {
-                    self.panel.selected = move_selection_clamp(self.panel.selected, count, -1);
+                    menu.r#move(-1, count, limit);
+                    self.panel.selected = menu.selected;
+                    self.panel.offset = menu.offset;
                 }
             }
-            FooterKey::Down => {
-                self.panel.selected = move_selection_clamp(self.panel.selected, count, 1);
+            FooterKey::Down | FooterKey::CtrlN => {
+                // G-498 — `down`/ctrl+n → `menu.move(1)`
+                // (footer.command.tsx:215-219).
+                menu.r#move(1, count, limit);
+                self.panel.selected = menu.selected;
+                self.panel.offset = menu.offset;
             }
-            FooterKey::Backspace => {
-                self.panel.query.pop();
-                self.panel.selected = reconcile_selection(self.panel.selected, count);
+            FooterKey::PageUp | FooterKey::PageDown => {
+                // G-498 — the page scroll: `menu.reveal(selected ±
+                // max(1, limit−1))` (footer.command.tsx:221-231) —
+                // the reveal CLAMPS the selection to the list and
+                // scrolls the window onto it (footer.menu.tsx:41-46).
+                let step = limit.saturating_sub(1).max(1);
+                let target = if key == FooterKey::PageUp {
+                    self.panel.selected.saturating_sub(step)
+                } else {
+                    self.panel.selected.saturating_add(step)
+                };
+                menu.reveal(target, count, limit);
+                self.panel.selected = menu.selected;
+                self.panel.offset = menu.offset;
             }
-            FooterKey::Left if settings_route => {
-                effects.extend(self.settings_change(-1));
+            FooterKey::Home => {
+                // G-498 — `menu.reveal(0)` (footer.command.tsx:233-
+                // 237).
+                menu.reveal(0, count, limit);
+                self.panel.selected = menu.selected;
+                self.panel.offset = menu.offset;
             }
-            FooterKey::Right if settings_route => {
-                effects.extend(self.settings_change(1));
+            FooterKey::End => {
+                // G-498 — `menu.reveal(Number.POSITIVE_INFINITY)`
+                // (footer.command.tsx:239-243) — the reveal clamps to
+                // the LAST row.
+                menu.reveal(usize::MAX, count, limit);
+                self.panel.selected = menu.selected;
+                self.panel.offset = menu.offset;
             }
-            FooterKey::Printable(char) => {
-                if char == 'u' && self.leader_armed && !queued_route {
-                    // ctrl+u clears the query (footer.command.tsx:254).
-                    self.leader_armed = false;
-                    self.panel.query.clear();
-                    self.panel.selected = 0;
-                } else if char == 'u' && self.leader_armed && queued_route {
-                    // G-272 — `queued_prompt.undo` (ctrl+u,
-                    // config/keybind.ts:132): cancel the row and
-                    // restore its text into the composer draft
-                    // (footer.view.tsx:801-811's `promptAppend`).
+            FooterKey::CtrlU => {
+                // G-498 — bare ctrl+u: the QUEUED panel's own keymap
+                // layer owns the chord (`queued_prompt.undo`,
+                // footer.command.tsx:975-999, priority 1 — the panel's
+                // useKeyboard sees defaultPrevented and never runs);
+                // every other panel's controller clears the query
+                // (`setQuery("")` + `field.setText("")`, :254-257) —
+                // and the query effect RESETS the menu
+                // (`query(); menu.reset()`, :166-169).
+                if queued_route {
                     self.leader_armed = false;
                     if let Some(prompt) = self.selected_queued_prompt() {
                         self.draft = if self.draft.is_empty() {
@@ -965,13 +1078,54 @@ impl FooterPane {
                         self.machine.close_panel();
                         self.panel = PanelState::default();
                     }
-                } else if queued_route && self.leader_armed && char == 'd' {
+                } else {
+                    self.panel.query.clear();
+                    self.panel.selected = 0;
+                    self.panel.offset = 0;
+                }
+            }
+            FooterKey::Backspace => {
+                self.panel.query.pop();
+                self.panel.selected = reconcile_selection(self.panel.selected, count);
+                self.panel.offset =
+                    crate::components::footer::state::reveal_selection_offset(
+                        self.panel.offset,
+                        count,
+                        limit,
+                        self.panel.selected,
+                    );
+            }
+            FooterKey::Left if settings_route => {
+                effects.extend(self.settings_change(-1));
+            }
+            FooterKey::Right if settings_route => {
+                effects.extend(self.settings_change(1));
+            }
+            FooterKey::Printable(char) => {
+                if queued_route && self.leader_armed && char == 'd' {
+                    // G-272 — the queued menu's leader-chord delete
+                    // emulation (queued_prompt.delete): kept as the
+                    // port's standing chord arm; the DIRECT ctrl+d key
+                    // stays out of this lane's G-498 key set.
                     self.leader_armed = false;
                     effects.extend(self.queued_entry_action("cancel"));
                 } else {
+                    // G-498 — the leader-'u' query-clear emulation is
+                    // GONE (the ref's `<leader>u` has no binding — the
+                    // unmatched chord's follow-up falls through to the
+                    // panel's search field exactly like every other
+                    // printable, footer.command.tsx:245-258); the real
+                    // ctrl+u now arrives as [`FooterKey::CtrlU`].
                     self.leader_armed = false;
                     self.panel.query.push(char);
                     self.panel.selected = reconcile_selection(self.panel.selected, count);
+                    self.panel.offset =
+                        crate::components::footer::state::reveal_selection_offset(
+                            self.panel.offset,
+                            count,
+                            limit,
+                            self.panel.selected,
+                        );
                 }
             }
             FooterKey::Enter => {
@@ -998,17 +1152,20 @@ impl FooterPane {
                     }
                 }
             }
-            FooterKey::Tab | FooterKey::PageUp | FooterKey::PageDown => {
+            FooterKey::Tab => {
                 // G-482 — the subagent menu's tab toggles the
                 // active/inactive list (`onKey`, footer.command.tsx:
                 // 903-908): `setActive(v => !v)` — the selection
                 // index stays (the menu's `reset()` fires on QUERY
                 // changes only, :166-169).
-                if subagent_menu_route && key == FooterKey::Tab {
+                if subagent_menu_route {
                     self.subagent_menu_active = !self.subagent_menu_active;
                 }
             }
-            FooterKey::CtrlT | FooterKey::CtrlP | FooterKey::CtrlB | FooterKey::CtrlF => {}
+            // G-498 — ctrl+p-while-open is the Up arm above
+            // (footer.command.tsx:209-213); pageup/pagedown the page
+            // arms. The remaining chords carry no panel meaning.
+            FooterKey::CtrlT | FooterKey::CtrlB | FooterKey::CtrlF => {}
             // G-272 — the leader chord arms from an open panel too
             // (the queued menu's undo/delete chords complete here).
             FooterKey::CtrlX => self.leader_armed = true,
@@ -1253,7 +1410,7 @@ impl FooterPane {
         let all = self.panel_all_entries();
         let filtered: Vec<_> =
             all.iter().filter(|item| fuzzy_matches(item, &self.panel.query)).cloned().collect();
-        let menu = FooterMenuState { selected: self.panel.selected, offset: 0 };
+        let menu = FooterMenuState { selected: self.panel.selected, offset: self.panel.offset };
         let mut canvas = Canvas::new(width, height);
         // G-482 — the subagent menu's list limit is
         // SUBAGENT_LIST_ROWS (12), not the command panel's 10
@@ -1330,8 +1487,14 @@ impl FooterPane {
             }
             // G-181① — `variant.cycle`'s layer is composer-route-only;
             // the inspector consumes the key without effect.
-            FooterKey::CtrlT => {}
-            FooterKey::CtrlF => {}
+            // G-498 — the controller's extended set joins the
+            // consumed list (the inspector is not a searchable panel).
+            FooterKey::CtrlT
+            | FooterKey::CtrlF
+            | FooterKey::CtrlN
+            | FooterKey::CtrlU
+            | FooterKey::Home
+            | FooterKey::End => {}
             FooterKey::CtrlP
             | FooterKey::CtrlX
             | FooterKey::CtrlB
@@ -1359,6 +1522,10 @@ impl FooterPane {
     #[must_use]
     pub fn pane_height(&self, term_height: usize) -> usize {
         use crate::components::footer::state::PANEL_LIST_ROWS;
+        // G-498 — record the live term height for the press-side
+        // panel layout (footerPanelLayout(renderer.terminalHeight,
+        // limit), footer.command.tsx:155-159).
+        self.term_height.set(term_height);
         // RD-19 — the launch row grows the dock by one
         // (`footer.ts:762`'s `desired + (this.startup() ? 1 : 0)`).
         let startup = usize::from(self.startup.is_some());
@@ -3072,9 +3239,14 @@ mod tests {
         );
     }
 
-    /// G-272 — the queued menu's undo (leader+u over ctrl+u,
-    /// config/keybind.ts:132): the row cancels and its text lands in
-    /// the composer draft (`promptAppend`).
+    /// G-272/G-498 — the queued menu's undo (ctrl+u,
+    /// config/keybind.ts:132 — the queued panel's own priority-1
+    /// keymap layer, footer.command.tsx:975-999): the row cancels and
+    /// its text lands in the composer draft (`promptAppend`).
+    /// (Re-pin, G-498: the old test drove the LEADER chord — the
+    /// port's pre-G-498 emulation of the ref's direct ctrl+u, which
+    /// `footer_key_from_spec` dropped; the chord's 'u' now falls
+    /// through to the query like every other unmatched follow-up.)
     #[test]
     fn queued_menu_undo_restores_the_prompt_text() {
         use crate::components::footer::PromptRoute;
@@ -3087,14 +3259,23 @@ mod tests {
         let _ = footer.press(FooterKey::CtrlX);
         let _ = footer.press(FooterKey::Printable('q'));
         assert_eq!(footer.machine.route, PromptRoute::QueuedMenu);
-        let _ = footer.press(FooterKey::CtrlX);
-        let effects = footer.press(FooterKey::Printable('u'));
+        // The direct chord: ctrl+u → queued_prompt.undo.
+        let effects = footer.press(FooterKey::CtrlU);
         assert_eq!(
             effects,
             vec![FooterEffect::QueuedPromptAction { action: "cancel", inbox_id: "msg_x".into() }]
         );
         assert_eq!(footer.machine.route, PromptRoute::Composer);
         assert_eq!(footer.draft, "queued thought");
+        // The leader chord's unmatched 'u' now TYPES into the query
+        // (the ref's `<leader>u` has no binding — the fallback).
+        let _ = footer.press(FooterKey::CtrlX);
+        let _ = footer.press(FooterKey::Printable('q'));
+        assert_eq!(footer.machine.route, PromptRoute::QueuedMenu);
+        let _ = footer.press(FooterKey::CtrlX);
+        let _ = footer.press(FooterKey::Printable('u'));
+        assert_eq!(footer.panel.query, "u", "the chord's u falls through to the query");
+        let _ = footer.press(FooterKey::Escape);
     }
 
     /// G-272 — the OSC title rule (`setTitle`,
@@ -3310,6 +3491,89 @@ mod tests {
         let _ = footer.press(FooterKey::Backspace);
         let _ = footer.press(FooterKey::Escape);
         assert_eq!(footer.machine.route, PromptRoute::Composer);
+    }
+
+    /// G-498 — the searchable-panel controller's full key set
+    /// (footer.command.tsx:186-259): pageup/pagedown page-scroll
+    /// `reveal(selected ± max(1, limit−1))` (:221-231), home/end
+    /// reveal 0/∞ (:233-243), ctrl+n moves down (:215-219),
+    /// ctrl+p-while-open moves UP (:209-213 — the palette layer is
+    /// composer-route-only so the open panel owns the chord), and
+    /// bare ctrl+u clears the query + resets the selection (:254-257
+    /// → the query effect's `menu.reset()`, :166-169). The window
+    /// offset follows every move (`menu.move`/`reveal`,
+    /// footer.menu.tsx:41-65) — the panel limit is 10 at the pane's
+    /// default term height.
+    #[test]
+    fn panel_controller_carries_the_full_key_set() {
+        use crate::components::footer::PromptRoute;
+        let mut footer = pane();
+        // Seed a queued prompt so the command list carries the
+        // "View pending prompts" row (11 entries — the window's 10
+        // overflows). The default pre-draw fallback height (24) lays
+        // out limit 10.
+        footer.queued_prompts = vec![QueuedPromptView {
+            message_id: "msg_p".into(),
+            text: "page fixture".into(),
+            delivery: "queue".into(),
+        }];
+        let _ = footer.press(FooterKey::CtrlP);
+        let count = footer.panel_entries().len();
+        let limit = 10usize;
+        let step = limit - 1;
+        assert!(count > limit, "the corpus command list overflows the window: {count}");
+        let in_window = |panel: &PanelState| {
+            panel.selected >= panel.offset && panel.selected < panel.offset + limit
+        };
+        // Down to the LAST row: the window follows the selection
+        // (the ref's `menu.move` — moveSelectionOffset).
+        for _ in 0..count {
+            let _ = footer.press(FooterKey::Down);
+        }
+        assert_eq!(footer.panel.selected, count - 1, "clamped at the last row");
+        assert!(in_window(&footer.panel), "the window follows the selection");
+        // ctrl+n moves down too (the same arm, :215-219) — already at
+        // the end, it clamps.
+        let _ = footer.press(FooterKey::CtrlN);
+        assert_eq!(footer.panel.selected, count - 1, "ctrl+n clamps at the end");
+        // PageUp: reveal(selected − max(1, limit−1)) — the window
+        // scrolls back with the selection (:221-231).
+        let _ = footer.press(FooterKey::PageUp);
+        assert_eq!(
+            footer.panel.selected,
+            (count - 1).saturating_sub(step),
+            "pageup steps back a page"
+        );
+        assert!(in_window(&footer.panel));
+        // PageDown: reveal(selected + 9), clamped to the list end.
+        let _ = footer.press(FooterKey::PageDown);
+        assert_eq!(footer.panel.selected, count - 1, "pagedown returns to the end");
+        // End: reveal(∞) — the LAST row (:239-243).
+        let _ = footer.press(FooterKey::End);
+        assert_eq!(footer.panel.selected, count - 1);
+        // Home: reveal(0) — the first row, window back to 0 (:233-237).
+        let _ = footer.press(FooterKey::Home);
+        assert_eq!(footer.panel.selected, 0);
+        assert_eq!(footer.panel.offset, 0);
+        // ctrl+p-while-open moves UP (the panel's own handler owns the
+        // chord while its route is open — no re-open, :209-213).
+        let _ = footer.press(FooterKey::Down);
+        let _ = footer.press(FooterKey::Down);
+        assert_eq!(footer.panel.selected, 2);
+        let _ = footer.press(FooterKey::CtrlP);
+        assert_eq!(footer.panel.selected, 1, "ctrl+p moved the selection up");
+        assert_eq!(footer.machine.route, PromptRoute::Command, "the panel stayed open");
+        // Bare ctrl+u: the query clears, the selection resets (the
+        // ref's `menu.reset()` on the query change, :254-257/:166-169).
+        for ch in "zz".chars() {
+            let _ = footer.press(FooterKey::Printable(ch));
+        }
+        assert!(!footer.panel.query.is_empty());
+        let _ = footer.press(FooterKey::CtrlU);
+        assert_eq!(footer.panel.query, "", "ctrl+u cleared the query");
+        assert_eq!(footer.panel.selected, 0, "the menu reset with the query");
+        assert_eq!(footer.panel.offset, 0);
+        let _ = footer.press(FooterKey::Escape);
     }
 
     /// G-272 — `<leader>q` (`session.queued_prompts`,

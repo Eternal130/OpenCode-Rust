@@ -61,7 +61,20 @@ pub fn clamp01(value: f64) -> f64 {
     value.clamp(0.0, 1.0)
 }
 
-/// `smootherstep` — the easing every pulse shape rides.
+/// `smoothstep` — the ref `tween()`'s DEFAULT ease (`animation.ts:35`
+/// `progress²·(3−2·progress)`; `:50` `ease: options.ease ?? smoothstep`).
+/// G-501: the tween faces that pass NO explicit ease — the marquee
+/// leading fade (250 ms), the number ignition (0.7 s) and the
+/// indicator dissolve (0.18 s) — ride THIS curve (3t²−2t³), not
+/// smootherstep/linear.
+#[must_use]
+pub fn smoothstep(value: f64) -> f64 {
+    let v = clamp01(value);
+    v * v * (3.0 - 2.0 * v)
+}
+
+/// `smootherstep` — the easing the pulse SHAPES ride (the ref's
+/// explicit `smootherstep` stages, tab-pulse.tsx:261/276-277).
 #[must_use]
 pub fn smootherstep(value: f64) -> f64 {
     let v = clamp01(value);
@@ -314,6 +327,13 @@ pub struct TabPulseTrack {
     pub glow_off_since: Option<u64>,
     /// When the completion flash fired.
     pub completion_since: Option<u64>,
+    /// G-503③ — the busy→idle PENDING transition (`setActive(false)`
+    /// sets `completionPending = true`, tab-pulse.tsx:347-350): the
+    /// one-shot arms only through this gate — `complete` arriving
+    /// while the pending lives (before the run release's 500 ms
+    /// window ends) fires it (:362-374, :397-403); a complete stamp
+    /// at mount or mid-busy fires NOTHING on its own.
+    pub completion_pending: bool,
     /// G-479 — the per-session prompt-pulse counter
     /// (`promptPulses`, context/session-tabs.tsx:80/310-315: one per
     /// `session.inbox.enqueued` user item on a non-current tab).
@@ -335,9 +355,19 @@ pub struct TabPulseTrack {
     /// G-479 — the dissolve's latched hue was the error unread (the
     /// ref latches the last `unreadColor`, `TabIndicator`'s memo).
     pub dissolve_error: bool,
+    /// G-503② — the glow epoch began at MOUNT in sustain (the
+    /// `GatedEnvelope` constructor's initial "sustain",
+    /// tab-pulse.tsx:274-279: a glow that exists at mount holds
+    /// sustain with NO ignition ramp, even with animations off; the
+    /// release's note-off level is the sustain's 1). Cleared by a
+    /// real post-mount ignition; held through the release.
+    glow_mount_sustain: bool,
     /// The last synced `unread` memo (the dissolve stamps only on the
     /// falling edge).
     unread_live: bool,
+    /// G-503③ — the last synced `complete` flag (`setComplete`'s
+    /// arms fire on the VALUE CHANGE only, tab-pulse.tsx:362-363).
+    complete_live: bool,
     /// G-479 — false until the first sync: the ref's per-tab
     /// components CONSTRUCT with the current status (no mount flash —
     /// `createNumberIgnition` seeds `wasRunning`/`promptPulse`, the
@@ -375,41 +405,97 @@ impl TabPulseTrack {
         pending: bool,
         now: u64,
     ) {
-        let was_runs = self.active_since.is_some();
+        // G-503③ — `was_runs` is the CURRENT busy state: the sweep
+        // attacking/sustaining (`active_since` set AND the release
+        // not armed). The old `active_since.is_some()` alone misread
+        // every post-idle re-sync as a flip (active_since stays set
+        // through the release by design) — each one re-stamped
+        // `idle_since` to now, re-arming the completion pending and
+        // restarting the release fade forever (the ref's `setActive`
+        // no-ops while the value is unchanged, tab-pulse.tsx:338-339).
+        let was_runs = self.active_since.is_some() && self.idle_since.is_none();
+        // G-503② — the glow epoch's origin: a POST-mount ignition
+        // ramps (clears the mount-sustain); the mount sync itself
+        // sets the flag right after (below).
+        let first_sync = !self.armed;
         if runs != was_runs || (runs && self.idle_since.is_some()) {
             if runs {
                 self.active_since = Some(now);
                 self.idle_since = None;
+                // G-503③ — `setActive(true)` (tab-pulse.tsx:342-346):
+                // the completion pulse stops and the pending clears.
                 self.completion_since = None;
+                self.completion_pending = false;
             } else {
                 self.idle_since = Some(now);
+                // G-503③ — `setActive(false)` arms the pending
+                // (tab-pulse.tsx:347-350): the one-shot can only fire
+                // through this gate, never off a bare complete stamp.
+                self.completion_pending = true;
             }
         }
         if glow != self.glow_since.is_some() {
             if glow {
                 self.glow_since = Some(now);
                 self.glow_off_since = None;
+                self.glow_mount_sustain = false;
             } else {
                 self.glow_off_since = Some(now);
             }
         }
-        if complete && self.completion_since.is_none() {
-            self.completion_since = Some(now);
+        // G-503② — mount-with-glow: the envelope CONSTRUCTS in
+        // sustain (tab-pulse.tsx:274-279) — no ignition ramp; the
+        // release's note-off level is the sustain's 1.
+        if first_sync && glow {
+            self.glow_mount_sustain = true;
         }
+        // G-503③ — the completion gate: `setComplete`'s arms
+        // (tab-pulse.tsx:362-374) + advance's pending observer
+        // (:397-403). The stop/clear runs only on the complete
+        // TRUE→FALSE transition (the ref's setter no-ops while the
+        // value is unchanged — a mid-busy `false` sync must NOT clear
+        // a pending the idle flip just armed); complete with the
+        // pending live fires the one-shot. The pending's life ends
+        // with the run release (advance's `releaseProgress ===
+        // undefined` arm — `RUN_FADE_OUT` after the idle flip); the
+        // boundary frame's order puts the fire FIRST (advance checks
+        // complete before the release observer), so `<=` fires at
+        // exactly the edge.
+        if !complete && self.complete_live {
+            self.completion_since = None;
+            self.completion_pending = false;
+        }
+        if complete && self.completion_pending {
+            let pending_live =
+                self.idle_since.is_some_and(|idle| elapsed(now, idle) <= RUN_FADE_OUT);
+            if pending_live {
+                self.completion_since = Some(now);
+            }
+            self.completion_pending = false;
+        }
+        self.complete_live = complete;
         // G-479 — the edge flash: a runs flip STARTS it at scale 1
-        // (start() no-ops while one is already running — a flip
-        // mid-flash does not re-stamp); a pulse++ RESTARTS it at
-        // scale 2. Either edge also retriggers the number ignition.
+        // (`Envelope.start()` re-fires on every idle-state flip once
+        // the previous flash decayed — G-503①: only a RUNNING clock
+        // no-ops, tab-pulse.tsx:136-140; the port's old
+        // `flash_since.is_none()` gate left it armed ONCE and never
+        // again); a pulse++ RESTARTS it at scale 2. Either edge also
+        // retriggers the number ignition.
         // The FIRST sync only records state (the ref constructs its
         // per-tab components with the live status — no mount flash).
-        let runs_flipped = self.armed && runs != was_runs;
+        // A re-ON while the release fade is armed is a runs flip too
+        // (the ref's active flag toggled false→true; the port's
+        // `active_since` stays set through the release — the G-457
+        // retrigger clause).
+        let runs_flipped =
+            self.armed && (runs != was_runs || (runs && self.idle_since.is_some()));
         let pulses_changed = self.armed && prompt_pulses != self.prompt_pulses;
         if runs_flipped || pulses_changed {
             self.ignition_since = Some(now);
         }
         if pulses_changed {
             self.flash_since = Some((now, PROMPT_FLASH_SCALE));
-        } else if runs_flipped && self.flash_since.is_none() {
+        } else if runs_flipped && !self.flash_running(now) {
             self.flash_since = Some((now, 1.0));
         }
         // G-479 — the indicator dissolve: unread jumps to 1, pending
@@ -436,24 +522,40 @@ impl TabPulseTrack {
         EDGE_FLASH_OPACITY * scale * attack_decay(progress, EDGE_FLASH_ATTACK, 1.0, 0.0)
     }
 
+    /// G-503① — `Envelope.start()`'s no-op gate (tab-pulse.tsx:136-
+    /// 140): only a RUNNING clock (decayed strictly before the 800 ms
+    /// duration) blocks a re-arm; after the one-shot decays the next
+    /// runs flip re-fires it.
+    fn flash_running(&self, now: u64) -> bool {
+        self.flash_since
+            .is_some_and(|(since, _)| elapsed(now, since) < EDGE_FLASH_DURATION)
+    }
+
     /// G-479 — the number ignition's level: the 0.85 jump tweened
-    /// linearly down to 0 over 0.7 s (a fresh trigger re-stamps, so
-    /// the tween restarts from 0.85).
+    /// down to 0 over 0.7 s with the ref `tween()`'s DEFAULT
+    /// smoothstep ease (G-501: `createNumberIgnition`'s
+    /// `tween({duration: 0.7})` passes no ease — animation.ts:50 —
+    /// so the value is `0.85·(1 − smoothstep(progress))`, not
+    /// linear; a fresh trigger re-stamps, so the tween restarts from
+    /// 0.85).
     #[must_use]
     pub fn ignition_level(&self, now: u64) -> f64 {
         let Some(since) = self.ignition_since else { return 0.0 };
         let progress = clamp01(elapsed(now, since) as f64 / IGNITION_DURATION_MS as f64);
-        IGNITION_JUMP * (1.0 - progress)
+        IGNITION_JUMP * (1.0 - smoothstep(progress))
     }
 
-    /// G-479 — the unread marker's dissolve opacity: 1 → 0 linearly
-    /// over 180 ms from the stamp (0 with no stamp). The mid-boost
+    /// G-479 — the unread marker's dissolve opacity: 1 → 0 over
+    /// 180 ms from the stamp with the ref `tween()`'s DEFAULT
+    /// smoothstep ease (G-501: `TabIndicator`'s
+    /// `tween({duration: 0.18})` — session-tabs.tsx:154-157 — passes
+    /// no ease, animation.ts:50), 0 with no stamp. The mid-boost
     /// (`1 − |opacity − 0.8| / 0.2`) is the consumer's to derive.
     #[must_use]
     pub fn dissolve_opacity(&self, now: u64) -> f64 {
         let Some(since) = self.dissolve_since else { return 0.0 };
         let progress = clamp01(elapsed(now, since) as f64 / DISSOLVE_DURATION_MS as f64);
-        1.0 - progress
+        1.0 - smoothstep(progress)
     }
 
     /// G-479 — the running sweep's level under the number cell (the
@@ -503,18 +605,27 @@ impl TabPulseTrack {
 
     /// The glow envelope: ignition past 1 then sustain; on release,
     /// the note-off residue drains over the leading 200 ms (the
-    /// release stage's drain shape).
+    /// release stage's drain shape). G-503②: an epoch that began at
+    /// MOUNT holds sustain directly (no ignition ramp) and its
+    /// release's note-off level is the sustain's 1.
     #[must_use]
     pub fn glow_level(&self, now: u64) -> f64 {
         if let Some(off) = self.glow_off_since {
-            let note_off = self.glow_since.map_or(1.0, |on| {
-                glow_ignition_level(clamp01(
-                    elapsed(off, on) as f64 / GLOW_IGNITION_DURATION as f64,
-                ))
-            });
+            let note_off = if self.glow_mount_sustain {
+                1.0
+            } else {
+                self.glow_since.map_or(1.0, |on| {
+                    glow_ignition_level(clamp01(
+                        elapsed(off, on) as f64 / GLOW_IGNITION_DURATION as f64,
+                    ))
+                })
+            };
             let drain_fraction = GLOW_FADE_OUT_MS as f64 / GLOW_RELEASE_DURATION as f64;
             let progress = elapsed(now, off) as f64 / GLOW_RELEASE_DURATION as f64;
             return note_off * fade_out(clamp01(progress / drain_fraction));
+        }
+        if self.glow_mount_sustain {
+            return 1.0;
         }
         let Some(on) = self.glow_since else { return 0.0 };
         glow_ignition_level(clamp01(elapsed(now, on) as f64 / GLOW_IGNITION_DURATION as f64))
@@ -535,14 +646,22 @@ impl TabPulseTrack {
     }
 
     /// The diffusing swell riding a released glow (above its resting
-    /// level, decaying to nothing over the 900 ms release).
+    /// level, decaying to nothing over the 900 ms release). G-503②:
+    /// a mount-sustained glow releases from level 1 (the
+    /// `releaseScale` captured at note-off is the sustain's 1).
     #[must_use]
     pub fn glow_release_swell(&self, now: u64) -> f64 {
         let Some(off) = self.glow_off_since else { return 0.0 };
         let progress = clamp01(elapsed(now, off) as f64 / GLOW_RELEASE_DURATION as f64);
-        let note_off = self.glow_since.map_or(1.0, |on| {
-            glow_ignition_level(clamp01(elapsed(off, on) as f64 / GLOW_IGNITION_DURATION as f64))
-        });
+        let note_off = if self.glow_mount_sustain {
+            1.0
+        } else {
+            self.glow_since.map_or(1.0, |on| {
+                glow_ignition_level(clamp01(
+                    elapsed(off, on) as f64 / GLOW_IGNITION_DURATION as f64,
+                ))
+            })
+        };
         glow_release_swell_shape(progress) * note_off.max(1.0)
     }
 
@@ -808,16 +927,35 @@ mod tests {
     /// release drains over the leading 200 ms with a swelling spread.
     #[test]
     fn glow_envelope_ignites_and_releases() {
+        // G-503② re-pin: a glow present at the FIRST sync (mount)
+        // holds sustain directly (the GatedEnvelope constructor's
+        // initial "sustain", tab-pulse.tsx:274-279) — the ignition
+        // ramp belongs to a POST-mount ignition only.
+        let mut mounted = TabPulseTrack::default();
+        mounted.sync(false, true, false, 0, false, false, 0);
+        assert_eq!(mounted.glow_level(0), 1.0, "mount-with-glow sustains at 1");
+        assert_eq!(mounted.glow_level(180), 1.0, "no ignition ramp at mount");
+        assert_eq!(mounted.glow_level(9_000), 1.0, "sustain holds");
+        // A post-mount ignition ramps: peak 1.5 at 30% of 600 ms.
         let mut track = TabPulseTrack::default();
-        assert_eq!(track.glow_level(0), 0.0, "no glow before ignition");
-        track.sync(false, true, false, 0, false, false, 0);
-        assert!((track.glow_level(180) - 1.5).abs() < 1e-9, "ignition peak at 30% of 600 ms");
-        assert!((track.glow_level(601) - 1.0).abs() < 1e-6, "settled to sustain");
+        track.sync(false, false, false, 0, false, false, 0);
+        track.sync(false, true, false, 0, false, false, 100);
+        assert_eq!(track.glow_level(100), 0.0, "origin at the ignition stamp");
+        assert!((track.glow_level(280) - 1.5).abs() < 1e-9, "ignition peak at 30% of 600 ms");
+        assert!((track.glow_level(701) - 1.0).abs() < 1e-6, "settled to sustain");
         track.sync(false, false, false, 0, false, false, 1_000);
         assert_eq!(track.glow_level(1_000), 1.0, "note-off held at the drain's origin");
         assert!((track.glow_level(1_100) - 0.5).abs() < 1e-9, "halfway through the drain");
         assert!(track.glow_release_swell(1_100) > 1.0, "the swell rides above rest");
         assert!(track.glow_release_spread(12.0, 32, 1_450) > 12.0, "the tail spreads");
+        // The mount-sustained epoch releases from level 1 (its
+        // note-off is the sustain's 1, not a ramped level).
+        mounted.sync(false, false, false, 0, false, false, 2_000);
+        assert_eq!(mounted.glow_level(2_000), 1.0, "the mount epoch's note-off is 1");
+        assert!(
+            (mounted.glow_level(2_100) - 0.5).abs() < 1e-9,
+            "the mount epoch drains from the sustain level"
+        );
     }
 
     /// The completion flash: the activity unread landing after idle
@@ -831,6 +969,56 @@ mod tests {
         track.sync(false, false, true, 0, false, false, 4_100);
         assert!(track.completion(4_244) > 0.17, "near the 0.18 peak");
         assert_eq!(track.completion(5_400), 0.0, "decays away");
+    }
+
+    /// G-503③ — the completion pulse arms ONLY through the busy→idle
+    /// pending transition (tab-pulse.tsx:342-374, 397-403): a
+    /// complete stamp at mount or mid-busy fires NOTHING; complete
+    /// arriving after the run release's 500 ms window never fires;
+    /// the pending+complete landing together at the flip fires at the
+    /// flip; a re-busy clears the pending; complete falling stops a
+    /// running pulse.
+    #[test]
+    fn completion_pulse_arms_only_through_the_idle_pending_gate() {
+        // A complete stamp at mount (idle, never busy): no flip, no
+        // pending — never fires.
+        let mut mounted = TabPulseTrack::default();
+        mounted.sync(false, false, true, 0, false, false, 0);
+        assert_eq!(mounted.completion(5_000), 0.0, "mount complete: no pulse");
+        // A complete stamp MID-BUSY: no pending — the old port fired
+        // here (tab_pulse.rs:396-398 pre-G-503); the ref fires only
+        // at the busy→idle transition.
+        let mut track = TabPulseTrack::default();
+        track.sync(true, false, false, 0, false, false, 0);
+        track.sync(true, false, true, 0, false, false, 100);
+        assert_eq!(track.completion(500), 0.0, "mid-busy complete: no pulse yet");
+        // The busy→idle transition (complete still true) fires AT the
+        // flip — the pending armed by setActive(false) and observed
+        // complete on the same frame (advance :397-403).
+        track.sync(false, false, true, 0, false, false, 1_000);
+        assert!(track.completion(1_144) > 0.17, "fires at the idle flip");
+        assert_eq!(track.completion(2_400), 0.0, "decays away");
+        // A re-busy clears the pending (setActive(true): stop +
+        // pending=false) — the flip to idle re-arms it and complete
+        // fires again.
+        track.sync(true, false, true, 0, false, false, 3_000);
+        assert_eq!(track.completion(3_100), 0.0, "re-busy stopped the pulse");
+        track.sync(false, false, true, 0, false, false, 4_000);
+        assert!(track.completion(4_144) > 0.17, "re-armed at the next idle flip");
+        // complete arriving AFTER the run release's 500 ms window:
+        // the pending expired — no pulse.
+        let mut late = TabPulseTrack::default();
+        late.sync(true, false, false, 0, false, false, 0);
+        late.sync(false, false, false, 0, false, false, 1_000);
+        late.sync(false, false, true, 0, false, false, 2_000);
+        assert_eq!(late.completion(2_100), 0.0, "complete past the release window: no pulse");
+        // complete falling stops a running pulse mid-flight.
+        let mut stopped = TabPulseTrack::default();
+        stopped.sync(true, false, false, 0, false, false, 0);
+        stopped.sync(false, false, true, 0, false, false, 1_000);
+        assert!(stopped.completion(1_100) > 0.0, "running after the flip");
+        stopped.sync(false, false, false, 0, false, false, 1_200);
+        assert_eq!(stopped.completion(1_300), 0.0, "complete=false stopped it");
     }
 
     /// `blend_tab_pulse_color` — the staged pull.
@@ -880,13 +1068,27 @@ mod tests {
         idle.sync(true, false, false, 0, false, false, 1_000);
         assert_eq!(idle.edge_flash(1_000), 0.0, "origin at the stamp");
         assert!((idle.edge_flash(1_080) - 0.1).abs() < 1e-12, "scale-1 peak at a runs flip");
+        // G-503① — the flash RE-ARMS on every idle-state flip once the
+        // previous one decayed (`Envelope.start()` re-fires — only a
+        // RUNNING clock no-ops, tab-pulse.tsx:136-140): the second and
+        // third flips each start a fresh scale-1 flash. (The old
+        // `flash_since.is_none()` gate armed it exactly once and runs
+        // flips after the first NEVER flashed.)
+        idle.sync(false, false, false, 0, false, false, 2_000);
+        assert!((idle.edge_flash(2_080) - 0.1).abs() < 1e-12, "the second flip re-arms the flash");
+        idle.sync(true, false, false, 0, false, false, 3_000);
+        assert!((idle.edge_flash(3_080) - 0.1).abs() < 1e-12, "the third flip re-arms it too");
     }
 
     /// The number ignition (`createNumberIgnition`,
-    /// session-tabs.tsx:215-230): 0.85 → 0 linearly over 700 ms,
-    /// retriggered by a runs flip OR a pulse++, never at mount.
+    /// session-tabs.tsx:215-230): 0.85 jump → tween to 0 over 700 ms
+    /// with the ref tween's DEFAULT smoothstep ease (G-501 re-pin:
+    /// the old test pinned the port's linear fall — the ref's
+    /// `tween({duration: 0.7})` passes no ease, animation.ts:50, so
+    /// the value is `0.85·(1 − smoothstep(p))`), retriggered by a
+    /// runs flip OR a pulse++, never at mount.
     #[test]
-    fn number_ignition_jumps_and_falls_linearly() {
+    fn number_ignition_jumps_and_falls_smoothstep() {
         let mut track = TabPulseTrack::default();
         track.sync(true, false, false, 0, false, false, 0);
         assert_eq!(track.ignition_level(0), 0.0, "no mount ignition");
@@ -894,16 +1096,21 @@ mod tests {
         assert_eq!(track.ignition_level(200), IGNITION_JUMP, "jump at the trigger");
         assert!((track.ignition_level(200 + 350) - IGNITION_JUMP / 2.0).abs() < 1e-9, "midpoint");
         assert_eq!(track.ignition_level(200 + IGNITION_DURATION_MS), 0.0, "faded out");
+        // The smoothstep shape: a quarter in, the ease has barely
+        // moved (3t²−2t³ at 0.25 ≈ 0.156 — vs linear 0.25).
+        assert!((track.ignition_level(200 + 175) - IGNITION_JUMP * (1.0 - smoothstep(0.25))).abs() < 1e-9);
         // The runs flip retriggers too.
         track.sync(false, false, false, 1, false, false, 1_000);
         assert_eq!(track.ignition_level(1_000), IGNITION_JUMP, "retriggered by the runs flip");
-        assert_eq!(track.ignition_level(1_000 + 50), IGNITION_JUMP * (1.0 - 50.0 / 700.0));
+        assert!((track.ignition_level(1_000 + 50) - IGNITION_JUMP * (1.0 - smoothstep(50.0 / 700.0))).abs() < 1e-9);
     }
 
     /// The indicator dissolve (`TabIndicator`'s fade,
     /// session-tabs.tsx:161-172): unread jumps to 1 (no animation),
-    /// the falling edge animates 1 → 0 over 180 ms, and pending (busy
-    /// or attention) clears instantly.
+    /// the falling edge animates 1 → 0 over 180 ms (G-501: with the
+    /// ref tween's DEFAULT smoothstep ease — the midpoint is 0.5 on
+    /// every symmetric curve, the shoulders differ from linear), and
+    /// pending (busy or attention) clears instantly.
     #[test]
     fn indicator_dissolve_falls_over_180ms_and_skips_pending() {
         let mut track = TabPulseTrack::default();
@@ -919,7 +1126,10 @@ mod tests {
         track.sync(false, false, false, 0, false, false, 400);
         assert_eq!(track.dissolve_since, Some(400), "the falling edge stamps");
         assert_eq!(track.dissolve_opacity(400), 1.0, "starts at full");
-        assert!((track.dissolve_opacity(400 + 90) - 0.5).abs() < 1e-9, "linear midpoint");
+        assert!((track.dissolve_opacity(400 + 90) - 0.5).abs() < 1e-9, "smoothstep midpoint");
+        // G-501 — the ease's shoulder: a quarter in the smoothstep
+        // has fallen only ≈15.6% (linear would be 25%).
+        assert!((track.dissolve_opacity(445) - (1.0 - smoothstep(0.25))).abs() < 1e-9);
         assert_eq!(track.dissolve_opacity(400 + DISSOLVE_DURATION_MS), 0.0, "dissolved");
         // The consumer's mid-boost peaks at opacity 0.8 (float-noise
         // tolerant at the shoulders).

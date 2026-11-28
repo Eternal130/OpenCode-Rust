@@ -55,8 +55,14 @@ pub enum PluginUiEvent {
         centered: bool,
     },
     /// G-475 — `ctx.ui.dialog.set({size?, centered?})`
-    /// (api.tsx:337-340): the ACTIVE dialog's presentation.
-    DialogSet { size: Option<String>, centered: bool },
+    /// (api.tsx:337-340): the ACTIVE dialog's presentation. G-518 —
+    /// `show_rows` re-flows the active show dialog's baked rows at
+    /// the new box width (the ref's live children re-layout).
+    DialogSet {
+        size: Option<String>,
+        centered: bool,
+        show_rows: Option<Vec<String>>,
+    },
     /// G-475 — `ctx.ui.dialog.clear()` (api.tsx:341-343).
     DialogClear,
     /// G-475 — `ctx.ui.dialog.select(options)` (api.tsx:387-427): the
@@ -235,9 +241,17 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
                 *centered,
             );
         }
-        // G-475 — dialog.set: the ACTIVE dialog's presentation.
-        PluginUiEvent::DialogSet { size, centered } => {
-            store.set_plugin_dialog_presentation(size.as_deref(), *centered);
+        // G-475 — dialog.set: the ACTIVE dialog's presentation. G-518 —
+        // the re-flattened show rows follow the size (the ref's
+        // children re-layout at the new box width,
+        // api.tsx:337-340 → ui/dialog.tsx:64-69).
+        PluginUiEvent::DialogSet { size, centered, show_rows } => {
+            store.set_plugin_dialog_presentation(
+                size.as_deref(),
+                *centered,
+                show_rows.as_deref(),
+                plugin_id,
+            );
         }
         // G-505 — dialog.clear (api.tsx:341-343 → dialog.tsx:159-169):
         // EVERY stack entry's close semantics run (onClose fires for

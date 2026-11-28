@@ -158,6 +158,7 @@ fn chip_composer() -> Composer {
         text: text.into(),
         files: vec![FileMention {
             name: "screenshot.png".into(),
+            description: None,
             start: text[..start].chars().count(),
             end: text[..end].chars().count(),
             payload: None,
