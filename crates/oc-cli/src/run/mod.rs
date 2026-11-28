@@ -391,7 +391,25 @@ async fn resolve_session_target(
             .and_then(|response| response.data)
             .map(|info| ModelRef { provider_id: info.provider_id, id: info.id, variant: None }),
     };
-    let agent = input.agent.clone();
+    // G-554 — the resume arm resolves the STORED session agent
+    // (`agent: input.agent ?? selected?.agent`,
+    // session-target.ts:58): the mini's `--continue` boots with the
+    // resumed session's agent (the statusline agent group + the turn
+    // summary read it through `MiniSessionTarget.agent` →
+    // `ResolvedSession.agent` → `turn_agent`/`pane.agent`,
+    // mini/runtime.rs) instead of falling to the "Build" default.
+    // The plain-run None below stays NEW-session-only — the ref's
+    // target tail (`prepared.agent ?? session.agent`,
+    // session-target.ts:86) fills a NEW session from the WIRE
+    // `session.agent` the create returned; the port leaves None there
+    // and the mini renders the same "Build" label through the catalog
+    // fallback (current_agent_label), so the observable face matches
+    // without the read-back.
+    let agent = match input.agent.clone() {
+        Some(agent) => Some(agent),
+        None if resume => selected.agent.clone(),
+        None => None,
+    };
 
     let session = if resume {
         selected

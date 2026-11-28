@@ -14353,6 +14353,10 @@ impl Store {
             return false;
         }
         if !self.connection_ever_connected.get() {
+            // G-563 (CLOSED-BY-RULING 2026-11-28, owner ruling (b)):
+            // this never-connected gate is a class ① intentional
+            // superset — the generated-client strictness's sibling. Do
+            // NOT "fix" it toward the ref's arm-from-connecting read.
             return false;
         }
         let threshold =
@@ -14575,15 +14579,24 @@ impl Store {
                 }
             }
             Ingest::Resync { mut sessions, unread, messages, cursors, permissions, forms } => {
-                // A resync only happens after a successful subscribe —
-                // the stream is attached, the client is connected
-                // (SURF-2: servers that never emit the `server.
-                // connected` event must not leave the state Connecting
-                // forever, or the Reconnecting scrim would cover a
-                // healthy session).
-                if self.connection.get() != ConnectionState::Connected {
-                    self.set_connection(ConnectionState::Connected);
-                }
+                // G-548 — a Resync NEVER touches the connection
+                // status. The ref's status is owned by the SSE
+                // handshake alone (server-sync/connection.ts:14-20:
+                // only the `server.connected` event flips it;
+                // client/solid/connection.ts:110-115 is the sole
+                // "connected" writer, :150/:163 the reconnect
+                // states) — a session-list fetch cannot touch it.
+                // The subscribe-gated path (data.rs's
+                // `resync_after_subscribe`) needs no flip here:
+                // `Ingest::Connected` follows the resync on every
+                // successful subscribe (the G-300 marker check
+                // guarantees the handshake landed first). The dialog
+                // refresh path (app.rs's `LoopFetch::SessionList`
+                // arm) ingests a Resync DIRECTLY — a flip there
+                // latched `connection_ever_connected` and defeated
+                // the W6 never-connected overlay gate (a
+                // never-connected boot that opened the sessions list
+                // surfaced "Connection lost…").
                 // TUI-TD05 — the resync's tail pages carry each open
                 // session's older-history cursor (`messageCursor`,
                 // client/solid/data.ts:1652: `more()` + `loadMore`
@@ -17329,6 +17342,55 @@ mod tests {
         // A session whose idle is unknown never posts.
         let calls = sink.calls.borrow().clone();
         let _ = calls;
+    }
+
+    /// G-548 — a Resync never touches the connection status. The
+    /// sessions-dialog refresh path (`LoopFetch::SessionList(Ok(..))`
+    /// in app.rs) ingests `Ingest::Resync` DIRECTLY — not after a
+    /// subscribe — so the arm must not flip `ConnectionState` (the
+    /// ref's status is driven by the `server.connected` SSE event
+    /// alone, server-sync/connection.ts:14-20). Pre-fix the arm set
+    /// `Connected` unconditionally, latching
+    /// `connection_ever_connected` and defeating the W6
+    /// never-connected overlay gate: a never-connected boot that
+    /// opened the sessions list surfaced "Connection lost…" once the
+    /// reconnect loop re-observed a failure.
+    #[test]
+    fn g548_resync_never_touches_the_connection_state() {
+        let store = Store::new(Runtime::new());
+        // The boot state: Connecting (the handshake marker has not
+        // arrived).
+        assert_eq!(store.connection(), ConnectionState::Connecting);
+        // The sessions-dialog refresh: a Resync ingested while never
+        // connected (the dialog's `session.list` refetch).
+        store.ingest_all([Ingest::Resync {
+            sessions: vec![SessionSnapshot { id: "s1".to_owned(), ..Default::default() }],
+            unread: vec!["s1".to_owned()],
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
+        }]);
+        // The state stays Connecting — only the `Ingest::Connected`
+        // handshake marker / `Ingest::Connection` loop observations
+        // write it.
+        assert_eq!(
+            store.connection(),
+            ConnectionState::Connecting,
+            "G-548: a Resync must not flip the connection state"
+        );
+        // The reconnect loop's next failure observation arrives (the
+        // never-connected churn): the W6 gate must still hold — the
+        // overlay stays suppressed (no ever-connected latch).
+        store.ingest_all([Ingest::Connection(ConnectionState::Reconnecting { attempt: 2 })]);
+        // Arm the overlay's first-observation anchor, then settle past
+        // the 1 s Reconnecting threshold: a latched gate would surface
+        // the overlay here.
+        let _ = store.reconnecting_overlay_visible(10_000);
+        assert!(
+            !store.reconnecting_overlay_visible(11_500),
+            "G-548: the never-connected boot must not surface the lost overlay (W6 gate)"
+        );
     }
 
     fn tab(id: &str, title: Option<&str>) -> SessionTab {
