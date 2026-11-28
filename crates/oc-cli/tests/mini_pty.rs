@@ -92,6 +92,12 @@ async fn start_stub(mode: PromptMode) -> Stub {
         let sub_tx = events_tx;
         loop {
             let Ok((mut socket, _)) = listener.accept().await else { break };
+            // G-579 FIX SPEC 2 (hardening, the pty_permission.rs:278
+            // pattern): no Nagle — the stub's writes are small
+            // per-event frames (the SSE subscription's g221 script
+            // above all), and a frame lingering in the socket buffer
+            // only shifts the batch split the needles sit on.
+            let _ = socket.set_nodelay(true);
             let sub_tx = sub_tx.clone();
             let output = Arc::clone(&output);
             let prompts = Arc::clone(&prompts);
@@ -410,7 +416,13 @@ async fn respond_json(socket: &mut tokio::net::TcpStream, body: &str) {
 
 /// The G-221 paced event script: one turn carrying the five display
 /// blocks, with inter-phase pauses so the footer repaints between the
-/// transient states (the queued count, the running shell).
+/// transient states (the queued count, the running shell). G-579 FIX
+/// SPEC 1: the `session.skill.activated` frame rides at the END of
+/// phase 1 — its scrollback commit forces a full footer-band repaint
+/// while the queued count is 3, so the `3 pending` needle is emitted
+/// literally whatever the batch split (the dock's diff repaint emits
+/// only CHANGED cells; a mid-phase first paint pins the count cell
+/// alone and the literal never appears).
 async fn emit_g221_script(tx: &tokio::sync::broadcast::Sender<String>) {
     let event = |kind: &str, data: serde_json::Value| {
         let _ = tx.send(
@@ -420,7 +432,17 @@ async fn emit_g221_script(tx: &tokio::sync::broadcast::Sender<String>) {
     };
     let session = serde_json::json!({ "sessionID": SESSION_ID });
     let pace = Duration::from_millis(700);
-    // Phase 1 — two rows queue: the dock paints "2 pending".
+    // G-579 — the phase-1→2 gap is its OWN duration (NOT `pace`, which
+    // paces every phase): the skill frame's forced full repaint must
+    // land while the count is still 3 and phase 2 rolls it back to 1,
+    // so the gap is the TUI event-loop stall it would take to merge
+    // phase 2 into the skill frame's processed batch (the one
+    // remaining failure mode) — 1.5 s. No assertion's timing depends
+    // on it: every needle wait is 30 s and the cancelled-row negative
+    // assert runs after phase 2's delivered row anyway.
+    let phase_gap = Duration::from_millis(1500);
+    // Phase 1 — the admit echo + the two scripted rows queue: the
+    // dock's count reaches 3.
     event("session.execution.started", session.clone());
     // G-579 POTENCY KNOB — TEMPORARY (removed before the final
     // commit): a forced split between the phase-1 frames 1 and 2 so
@@ -447,8 +469,24 @@ async fn emit_g221_script(tx: &tokio::sync::broadcast::Sender<String>) {
             "item": { "type": "user", "payload": { "text": "queued two" }, "delivery": "queue" },
         }),
     );
-    tokio::time::sleep(pace).await;
-    // Phase 2 — one cancels, one delivers; a skill activates.
+    // G-579 FIX SPEC 1 — the skill frame rides at the END of phase 1:
+    // its scrollback commit sets `force_draw` (mini/lifecycle.rs:2689)
+    // and the next `draw_footer` repaints the WHOLE band
+    // (:2762-2774, `forced && !height_changed` drops the diff base),
+    // so `ctrl+x q 3 pending · …` is emitted literally WHILE the count
+    // is 3 — whatever the batch split. (With the frame in phase 2 the
+    // only full repaint in the count-3 window is the first running
+    // paint, a race the stub loses whenever the TUI paints mid-phase:
+    // the count's change to 3 then goes out as ONE cell and the
+    // `3 pending` needle never appears in the byte stream.)
+    event(
+        "session.skill.activated",
+        serde_json::json!({
+            "sessionID": SESSION_ID, "id": "skl_deploy", "name": "deploy", "text": "…",
+        }),
+    );
+    tokio::time::sleep(phase_gap).await;
+    // Phase 2 — one cancels, one delivers.
     event(
         "session.inbox.cancelled",
         serde_json::json!({ "sessionID": SESSION_ID, "inboxID": "msg_g21" }),
@@ -456,12 +494,6 @@ async fn emit_g221_script(tx: &tokio::sync::broadcast::Sender<String>) {
     event(
         "session.inbox.delivered",
         serde_json::json!({ "sessionID": SESSION_ID, "inboxID": "msg_g22" }),
-    );
-    event(
-        "session.skill.activated",
-        serde_json::json!({
-            "sessionID": SESSION_ID, "id": "skl_deploy", "name": "deploy", "text": "…",
-        }),
     );
     tokio::time::sleep(pace).await;
     // Phase 3 — a direct shell runs and exits 0.
@@ -1089,7 +1121,10 @@ async fn mini_pty_demo_slash_commands() {
 /// echo), a skill activation row, the direct-shell rows (`$ command`
 /// + the merged output), a server-driven compaction (the divider +
 /// the streamed summary), and a streaming tool input that settles at
-/// its final caption.
+/// its final caption. G-579: the `3 pending` needle rides the skill
+/// frame's forced full-band repaint (see `emit_g221_script`) — the
+/// dock's diff repaint emits only CHANGED cells, so a bare count
+/// change would never emit the literal.
 #[tokio::test(flavor = "multi_thread")]
 async fn mini_pty_g221_inbox_skill_shell_compaction_tool_input() {
     let stub = start_stub(PromptMode::G221Live).await;
@@ -1109,7 +1144,8 @@ async fn mini_pty_g221_inbox_skill_shell_compaction_tool_input() {
     // response echo merges one pending row (`mergePending`,
     // transport.ts:620-630 — the optimistic admit), then two scripted
     // rows queue (the count reaches 3), one cancels, one delivers
-    // (the user echo).
+    // (the user echo). The count-3 literal rides the skill frame's
+    // forced repaint (G-579 — see `emit_g221_script`).
     assert!(
         mini.wait_for("3 pending", Duration::from_secs(30)),
         "the footer's queued count (the admit echo + the two scripted rows): {}",
