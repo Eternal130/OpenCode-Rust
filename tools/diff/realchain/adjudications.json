@@ -906,32 +906,6 @@
       "justification": "ADJUDICATED (controller 2026-11-26): capture skew across the 1s duration-unit boundary — the post-va21 merge-gate export showed ref __MS__ vs rust __SECS__ on the settled footer; targeted re-run of w13_perm_once_pair at c9411950 is TRY2 PASS 13.663s (retry-passes, same signature as w13-perm-always-timing). Re-open as a real gap only if the shape reproduces at settled quiescence."
     },
     {
-      "id": "v21b-router-toast-wrapwidth",
-      "scenario_pattern": "v21b-router",
-      "state_pattern": "*",
-      "shape": {
-        "kind": "regex",
-        "any_contains": [
-          "(?:hasSessionID|hasData|v21b\\.router\\.tui)"
-        ]
-      },
-      "classification": "pending-fix",
-      "justification": "ADJUDICATED (controller 2026-11-26): the route-shape JSON text matches on both ends (G-513 closed, v21b-router anchors); the residual rows are the toast panel's wrap-width with long content → G-517 (wave va22a). Frame evidence: .test-logs/diff-reports/v21b-router-*.txt"
-    },
-    {
-      "id": "v21b-show-set-large-reflow",
-      "scenario_pattern": "v21b-show",
-      "state_pattern": "set-large",
-      "shape": {
-        "kind": "regex",
-        "any_contains": [
-          "v21b two left"
-        ]
-      },
-      "classification": "pending-fix",
-      "justification": "ADJUDICATED (controller 2026-11-26): the one-shot flatten's baked 60-padding vs the ref's live 88 re-flow after dialog.set({size:'large'}) → G-518 (wave va22a). Frame evidence: .test-logs/diff-reports/v21b-show-set-large.txt"
-    },
-    {
       "id": "v21b-tabs-model-values-g515",
       "scenario_pattern": "v21b-tabs-model",
       "state_pattern": "values",
