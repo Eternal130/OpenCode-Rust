@@ -25,7 +25,7 @@ tools/dev-gate.sh 'cargo nextest run -p oc-tui --locked <filter>'   # day-to-day
 
 Wrap exactly one cargo command per invocation. Verification scripts (`tools/diff/*.py`, `tools/parity/*.sh`, `tools/guards/run.sh`) run **directly — never wrapped in dev-gate** (lock-in-lock).
 
-**Auto-tee**: dev-gate logs each gated command's complete output (stdout+stderr, untruncated) to `.test-logs/<crates>-<time>-<OC_GATE_LANE>.log` (crate names taken from `-p` flags, `--workspace` → `workspace`, default tag `gate`). That log is the test evidence — **do not tee manually on top** (double write); directly-run verification scripts still need a manual tee.
+**Auto-tee**: dev-gate logs each gated command's complete output (stdout+stderr, untruncated) to `.test-logs/<crates>-<time>-<OC_GATE_LANE>.log` (crate names taken from `-p` flags, `--workspace` → `workspace`, default tag `gate`). That log is the test evidence — **do not tee manually on top** (double write); directly-run verification scripts still need a manual tee. **Console echo (2026-11-28)**: the full stream always goes to the log; when stdout is not a TTY (subagents, shell capture) the console gets a bounded view instead — ≤200 lines are echoed whole (≤600 on failure), larger outputs show the Summary/FAIL/TRY/SLOW/error lines (+ the last 40 lines on failure) and the log path. `OC_GATE_QUIET=0` forces the full stream, `=1` the digest. Never filter or truncate inside the gated command — that shrinks the run AND the log; read details from the log path.
 
 ### 2. nextest tiers (`.config/nextest.toml`: threads=4, global retry=1; pty/be1 families retry=2)
 

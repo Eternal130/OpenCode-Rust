@@ -15,6 +15,11 @@
 #   4. GLOBAL SERIALIZATION: exactly one gate scope on the machine at a
 #      time (2026-10-19 incident: concurrent scopes exhausted memory and
 #      systemd-oomd killed the user session + system services).
+#   5. CONSOLE ECHO (2026-11-28): the evidence tee ALWAYS writes the full
+#      log; what the CONSOLE sees is bounded by tools/dev-gate-echo.sh
+#      whenever stdout is not a TTY (subagents, shell capture — a full
+#      merge gate is ~2500 lines / ~70k tokens). Short outputs are echoed
+#      whole, long ones as a digest. The on-disk log never changes.
 #
 # (2026-11-22 user ruling: the former IDENTITY item — always execute as a
 # configured non-root dev user — was retired along with the "no root cargo"
@@ -22,6 +27,9 @@
 #
 # Usage:   tools/dev-gate.sh '<command to run with cargo on PATH>'
 # Example: tools/dev-gate.sh 'cargo nextest run --workspace --no-fail-fast'
+# Env:     OC_GATE_LANE=<log label>    OC_GATE_QUIET=0|1|auto (console echo:
+#          auto = full stream on a TTY, the digest otherwise; 0 forces the
+#          full stream, 1 forces the digest)
 set -euo pipefail
 
 # --- global serialization (2026-10-19 incident) ---------------------------
@@ -107,6 +115,18 @@ else
   GATE_DIR="${REPO_ROOT}"
 fi
 
+# --- console echo mode (2026-11-28, header item 5) ----------------------------
+# Validated BEFORE any log is created. auto (default): the full stream when
+# stdout is a TTY, the bounded digest otherwise. The log on disk is complete
+# in every mode.
+GATE_QUIET=auto
+case "${OC_GATE_QUIET:-auto}" in
+  1|true|yes) GATE_QUIET=1 ;;
+  0|false|no) GATE_QUIET=0 ;;
+  auto) if [ -t 1 ]; then GATE_QUIET=0; else GATE_QUIET=1; fi ;;
+  *) echo "dev-gate: OC_GATE_QUIET must be 0, 1 or auto (got '${OC_GATE_QUIET}')" >&2; exit 2 ;;
+esac
+
 # --- evidence tee (register 2.1#3) ------------------------------------------
 # Every gated run is logged IN FULL to the target checkout's .test-logs/
 # (the log is the only test evidence — log lost = evidence lost). The tee
@@ -119,6 +139,9 @@ LOG_DIR="${GATE_DIR}/.test-logs"
 mkdir -p "$LOG_DIR"
 LOG="${LOG_DIR}/${LOG_CRATES}-$(date +%Y%m%d-%H%M%S)-${OC_GATE_LANE:-gate}.log"
 echo "dev-gate: logging full output to ${LOG}" >&2
+if [[ "$GATE_QUIET" == 1 ]]; then
+  echo "dev-gate: console echo is the bounded digest (stdout is not a TTY) — OC_GATE_QUIET=0 for the full stream" >&2
+fi
 
 # FD-inheritance fix (2026-11-18 incident, va6 hardening): the gate's lock
 # fd 9 was inherited by EVERY gated child (cargo/nextest/test binaries/TUI+
@@ -132,18 +155,49 @@ echo "dev-gate: logging full output to ${LOG}" >&2
 #   * `9>&-` on tee: the evidence tee is also a lock-fd holder otherwise.
 # The gate script itself (this shell) keeps owning the flock for the run's
 # duration; a killed gate therefore frees the lock at once.
-systemd-run --scope --quiet 9>&- \
-  --unit="opencode-gate-$(date +%s)-$$" \
-  -p CPUQuota=400% \
-  -p MemoryMax=12G \
-  -p TasksMax=2048 \
-  --setenv=OPENCODE_DEV_GATE=1 \
-  bash 9>&- -c "cd ${GATE_DIR} && $1" 2>&1 | tee "$LOG" 9>&-
+# gate_scope — the gated command under the transient scope, as ONE
+# definition: the caps and the fd closures above must never drift between
+# the verbose and the quiet pipeline below. Emits the run's stream on stdout.
+gate_scope() {
+  systemd-run --scope --quiet 9>&- \
+    --unit="opencode-gate-$(date +%s)-$$" \
+    -p CPUQuota=400% \
+    -p MemoryMax=12G \
+    -p TasksMax=2048 \
+    --setenv=OPENCODE_DEV_GATE=1 \
+    bash 9>&- -c "cd ${GATE_DIR} && $1" 2>&1
+}
+# errexit is lifted around the pipeline so a FAILING run still reaches the
+# tee check, the console echo and the exit below (before 2026-11-28 the
+# script died at the pipeline under `set -e` — the tee-failure branch and
+# the closing log-path line were unreachable on failure). The exit status
+# is run_rc either way.
+set +e
+if [[ "$GATE_QUIET" == 1 ]]; then
+  # quiet: the tee still writes the complete log; only its console copy is
+  # dropped — the bounded view is printed from the log after the run.
+  gate_scope "$1" | tee "$LOG" >/dev/null 9>&-
+else
+  gate_scope "$1" | tee "$LOG" 9>&-
+fi
 ps=("${PIPESTATUS[@]}")
+set -e
 run_rc=${ps[0]}; tee_rc=${ps[1]}
 if [ "$tee_rc" -ne 0 ]; then
   echo "dev-gate: tee FAILED (rc=$tee_rc) — evidence-loss risk for ${LOG}" >&2
   run_rc=1
+fi
+# The bounded console view (quiet mode only) — read from the complete log,
+# written to stdout (the stream the tee itself used), never touching the
+# exit status. fd 9 closed: the echo helper must not hold the gate lock.
+if [[ "$GATE_QUIET" == 1 ]]; then
+  GATE_ECHO="${REPO_ROOT}/tools/dev-gate-echo.sh"
+  if [[ -x "$GATE_ECHO" ]]; then
+    "$GATE_ECHO" "$LOG" "$run_rc" 9>&- || echo "dev-gate: console echo failed (rc=$?) — read ${LOG}" >&2
+  else
+    echo "dev-gate: ${GATE_ECHO} is missing — the last 40 lines of ${LOG}:" >&2
+    tail -n 40 "$LOG"
+  fi
 fi
 echo "dev-gate: full log at ${LOG}" >&2
 exit "$run_rc"
