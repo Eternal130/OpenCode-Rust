@@ -422,6 +422,17 @@ async fn emit_g221_script(tx: &tokio::sync::broadcast::Sender<String>) {
     let pace = Duration::from_millis(700);
     // Phase 1 — two rows queue: the dock paints "2 pending".
     event("session.execution.started", session.clone());
+    // G-579 POTENCY KNOB — TEMPORARY (removed before the final
+    // commit): a forced split between the phase-1 frames 1 and 2 so
+    // the first running paint lands mid-phase (the count at 1, the
+    // later change to 3 as one cell) — the exact race the reorder
+    // fixes, made deterministic for the proof runs.
+    if let Some(split) = std::env::var("OC_MINI_PTY_SPLIT_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+    {
+        tokio::time::sleep(Duration::from_millis(split)).await;
+    }
     event(
         "session.inbox.enqueued",
         serde_json::json!({
@@ -788,6 +799,14 @@ impl MiniPty {
         false
     }
 
+    /// G-579 (FIX SPEC 3) — the panic-dump printer: [`render_stream`]
+    /// over the captured PTY bytes. The g221 asserts dump this instead
+    /// of the raw stream (the needles themselves still match the RAW
+    /// bytes — only the dump is rendered).
+    fn rendered(&self) -> String {
+        render_stream(&self.output())
+    }
+
     fn type_text(&mut self, text: &str) {
         self.master.write_all(text.as_bytes()).expect("write");
     }
@@ -818,6 +837,40 @@ impl Drop for MiniPty {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// G-579 (FIX SPEC 3) — render a PTY byte stream for a panic dump:
+/// every control byte becomes its visible control-picture glyph
+/// (`ESC` → `␛`, CR → `␍`, DEL → `␡`; LF stays a real line break so
+/// rows stay rows). The dock's diff repaint emits ONE-cell changes —
+/// a lone `3` where `3 pending` should be — interleaved with
+/// cursor-motion escapes; a RAW dump shreds itself and the
+/// single-cell diff is unreadable, the rendered dump keeps every
+/// byte visible IN PLACE (the shape the G-579 diagnosis quoted only
+/// after hand-decoding the raw log).
+fn render_stream(stream: &str) -> String {
+    stream
+        .chars()
+        .map(|ch| match ch {
+            '\n' => '\n',
+            '\x7f' => '␡',
+            ch if (ch as u32) < 0x20 => char::from_u32(0x2400 + ch as u32).unwrap_or(ch),
+            ch => ch,
+        })
+        .collect()
+}
+
+/// The printer's own check (G-579 FIX SPEC 3): a diff-repaint
+/// fragment — the lone `3` cell + spinner cells after `menu`, a CUP
+/// escape, a trailing raw-mode CR — stays fully visible and in place
+/// in the rendered dump.
+#[test]
+fn mini_pty_render_dump_visible_control_glyphs() {
+    let raw = "┃   | ctrl+x q 1 pending · ctrl+p menu    3\x1b[12;1H|/-\\\r\n";
+    let rendered = render_stream(raw);
+    assert_eq!(rendered, "┃   | ctrl+x q 1 pending · ctrl+p menu    3␛[12;1H|/-\\␍\n");
+    assert!(!rendered.contains('\x1b'), "no raw ESC survives: {rendered:?}");
+    assert!(!rendered.contains('\r'), "no raw CR survives: {rendered:?}");
 }
 
 // -- the tests ---------------------------------------------------------------
@@ -1060,36 +1113,36 @@ async fn mini_pty_g221_inbox_skill_shell_compaction_tool_input() {
     assert!(
         mini.wait_for("3 pending", Duration::from_secs(30)),
         "the footer's queued count (the admit echo + the two scripted rows): {}",
-        mini.output()
+        mini.rendered()
     );
     assert!(
         mini.wait_for("> queued two", Duration::from_secs(30)),
         "the delivered row's user echo: {}",
-        mini.output()
+        mini.rendered()
     );
     assert!(
         !mini.output().contains("> queued one"),
         "the cancelled row never echoes: {}",
-        mini.output()
+        mini.rendered()
     );
     // Block 3 — the skill row (`→ Skill "name"`,
     // stream-v2.transport.ts:399-408).
     assert!(
         mini.wait_for("→ Skill \"deploy\"", Duration::from_secs(30)),
         "the skill activation row: {}",
-        mini.output()
+        mini.rendered()
     );
     // Block 2 — the direct-shell rows: `$ command` + the merged
     // output (tool.ts:1282-1294).
     assert!(
         mini.wait_for("$ echo g221 hello", Duration::from_secs(30)),
         "the shell start row: {}",
-        mini.output()
+        mini.rendered()
     );
     assert!(
         mini.wait_for("g221 shell output", Duration::from_secs(30)),
         "the shell output row: {}",
-        mini.output()
+        mini.rendered()
     );
     // Block 4 — the server-driven compaction: the divider header + the
     // streamed summary (transport.ts:416-448, 1086-1124). The mono
@@ -1098,24 +1151,24 @@ async fn mini_pty_g221_inbox_skill_shell_compaction_tool_input() {
     assert!(
         mini.wait_for("─── Compaction ───", Duration::from_secs(30)),
         "the compaction divider: {}",
-        mini.output()
+        mini.rendered()
     );
     assert!(
         mini.wait_for("Distilled", Duration::from_secs(30)),
         "the compaction delta row: {}",
-        mini.output()
+        mini.rendered()
     );
     assert!(
         mini.wait_for("context.", Duration::from_secs(30)),
         "the compaction ended suffix row: {}",
-        mini.output()
+        mini.rendered()
     );
     // Block 5 — the streaming tool input settles at its final caption
     // (`session.tool.input.ended`, transport.ts:1260-1272).
     assert!(
         mini.wait_for("Bash · oc fmt --check", Duration::from_secs(30)),
         "the finalized tool-input caption: {}",
-        mini.output()
+        mini.rendered()
     );
 
     mini.exit_sequence();
