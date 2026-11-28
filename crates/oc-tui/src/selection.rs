@@ -323,8 +323,11 @@ impl ScreenSelection {
         self.dragged || self.retained
     }
 
-    /// Clear the selection (`renderer.clearSelection()` — also resets
-    /// the multi-click history: `copy`'s comment, selection.ts:60).
+    /// Clear the selection (`renderer.clearSelection()`). Does NOT
+    /// reset the multi-click history — that lives in the App
+    /// (`selection_last_press` / `selection_click_count`; the ref's
+    /// renderer keeps its `lastClick` state just as separate), and
+    /// `copy` never clears the selection at all (selection.ts:60).
     pub fn clear(&mut self) {
         self.anchor = None;
         self.head = None;
