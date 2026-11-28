@@ -1049,6 +1049,19 @@
       },
       "classification": "framework-diff",
       "justification": "ADJUDICATED (controller 2026-11-28): capture skew across the 1s duration-unit boundary — the first va22a merge-gate export (13:44, under the 4-way gate load) showed ref __SECS__ vs rust __MS__ on the statusline (line 28), while the same product code exported EXACT at 13:23 (the lane's gate) and at 14:13:42 (the re-run gate, tree 19ba351e). Same signature as w13-perm-always-timing / w13-perm-once-timing. Re-open as a real gap only if the shape reproduces at settled quiescence."
+    },
+    {
+      "id": "v21h-rs-g489-g490-residuals",
+      "scenario_pattern": "v21h-rs",
+      "state_pattern": "*",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "(?:replay/|Replay Anthropic|┃|ctrl\\+p|agent|Search|▀)"
+        ]
+      },
+      "classification": "pending-fix",
+      "justification": "ADJUDICATED (controller 2026-11-28): va21h's resume-agent anchor (the va19sub two-phase re-export pattern — the v21g-rs precedent). Every residual row is the registered mini-frontend family: G-490 (the model group 'replay/claude-opus-4-7' vs 'claude-opus-4-7', the provider group 'replay' vs 'Replay Anthropic') and G-489 (the composer/statusline seating offset — the `┃` rows and the statusline rows shifted between the two ends). The agent face itself is EXACT on both ends in all three states (first-turn-settled / resume-settled / resume-second-turn read 'Plan'; the pre-fix port read 'Build') — 'Build' is deliberately NOT in this entry's shape, so a regression to it resurfaces as un-adjudicated. Before/after divergence counts 5→5 and 4→4; the third state is new (R30's un-anchored \"a new turn on --continue\"). Frame evidence: .test-logs/diff-reports/v21h-rs-*.txt"
     }
   ]
 }
