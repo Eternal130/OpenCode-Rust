@@ -143,4 +143,4 @@ test-threads = 2
 # reader threads are starved per-thread, which a cheap witness thread
 # cannot see (3/3 stress rounds still first-try red) — do not retry it.
 [profile.merge]
-default-filter = 'not(binary(realchain_va17) or binary(realchain_va18) or binary(realchain_va19) or binary(realchain_va20) or binary(realchain_v21) or binary(realchain_v21b) or binary(realchain_v21c) or binary(realchain_v21d) or binary(realchain_v21e) or binary(realchain_v21f) or binary(realchain_v21g) or binary(realchain_v22a) or binary(realchain_v21h) or binary(spec_e1_canary))'
+default-filter = 'not(binary(realchain_va17) or binary(realchain_va18) or binary(realchain_va19) or binary(realchain_va20) or binary(realchain_v21) or binary(realchain_v21b) or binary(realchain_v21c) or binary(realchain_v21d) or binary(realchain_v21e) or binary(realchain_v21f) or binary(realchain_v21g) or binary(realchain_v22a) or binary(realchain_v21h) or binary(realchain_stw11) or binary(spec_e1_canary))'

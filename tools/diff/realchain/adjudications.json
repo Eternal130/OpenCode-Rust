@@ -1078,6 +1078,22 @@
       "g_ref": "st579 post-merge gate export 2026-11-28 19:07",
       "adjudicated_by": "controller",
       "adjudicated_at": "2026-11-28"
+    },
+    {
+      "id": "stw11-wordselect-boundary",
+      "scenario_pattern": "stw11",
+      "state_pattern": "wordselect",
+      "shape": {
+        "kind": "regex",
+        "rust_contains": [
+          "bbbbbbbbbc"
+        ]
+      },
+      "classification": "pending-fix",
+      "justification": "ADJUDICATED (controller 2026-11-28): the stw11 anchor's own tripwire row — DIVERGENCES G-601. On the reply row `     REALCHAIN-REPLAY-OK` (the press inside REALCHAIN) the ref word-selects the whole 19-cell hyphenated token (style class b x 19: opentui 0.5.14 selectWord extends over the same boundary-CLASS run and hyphen is not in default_word_boundaries, text-buffer-view.zig:65-83) while the port selects REALCHAIN only (b x 9, then the unselected text class c x 10: selection.rs is_word_codepoint is the editor's word-motion rule). The shape keys on the rust side's 9-cell run followed by the unselected class; it must DISAPPEAR when G-601's fix lands (then retire this entry). The state's toast face and every other row are EXACT.",
+      "g_ref": "stw11 lane anchor export 2026-11-28 21:50 (tree 6a156108 + the stw11 delta)",
+      "adjudicated_by": "controller",
+      "adjudicated_at": "2026-11-28"
     }
   ]
 }
