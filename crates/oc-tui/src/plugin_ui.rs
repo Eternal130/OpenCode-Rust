@@ -58,11 +58,7 @@ pub enum PluginUiEvent {
     /// (api.tsx:337-340): the ACTIVE dialog's presentation. G-518 —
     /// `show_rows` re-flows the active show dialog's baked rows at
     /// the new box width (the ref's live children re-layout).
-    DialogSet {
-        size: Option<String>,
-        centered: bool,
-        show_rows: Option<Vec<String>>,
-    },
+    DialogSet { size: Option<String>, centered: bool, show_rows: Option<Vec<String>> },
     /// G-475 — `ctx.ui.dialog.clear()` (api.tsx:341-343).
     DialogClear,
     /// G-475 — `ctx.ui.dialog.select(options)` (api.tsx:387-427): the

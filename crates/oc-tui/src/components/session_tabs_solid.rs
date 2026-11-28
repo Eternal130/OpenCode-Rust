@@ -1879,8 +1879,7 @@ mod tests {
         // LINEAR fall was 7/9; the smoothstep holds higher
         // (1 − sm(2/9) ≈ 0.874 — the marker lingers brighter longer,
         // exactly the ref's ease).
-        let opacity: f64 =
-            1.0 - crate::components::tab_pulse::smoothstep(40.0 / 180.0);
+        let opacity: f64 = 1.0 - crate::components::tab_pulse::smoothstep(40.0 / 180.0);
         let flash = (1.0 - (opacity - 0.8).abs() / 0.2).max(0.0);
         let brightened =
             crate::components::tab_pulse::tint(colors.accent, colors.text, flash * 0.3);

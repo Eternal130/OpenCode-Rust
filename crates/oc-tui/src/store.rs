@@ -5631,12 +5631,8 @@ impl Store {
                 Some(mention) => {
                     // The metadata triple + the payload — the ref's
                     // Map<metadata, Set<payload>> as a flat tuple.
-                    let key = (
-                        file.name.clone(),
-                        file.description.clone(),
-                        mention.clone(),
-                        uri.clone(),
-                    );
+                    let key =
+                        (file.name.clone(), file.description.clone(), mention.clone(), uri.clone());
                     if seen.insert(key) {
                         out.push(uri);
                     }
@@ -11993,6 +11989,10 @@ impl Store {
     /// per-line `{prompt, timestamp}` decode, corrupt lines skipped,
     /// the last MAX entries kept). Called at boot with the resolved
     /// state root; a missing file leaves the stash empty.
+    // The G-504 description decode threads through the same single
+    // pass as the rest of the fields (the ref's parsePromptStash is
+    // one loop over the JSON lines).
+    #[allow(clippy::too_many_lines)]
     pub fn stash_init(&self, path: Option<std::path::PathBuf>) {
         let Some(path) = path else { return };
         let mut entries = Vec::new();
@@ -17011,10 +17011,8 @@ mod tests {
         use crate::components::composer::{AttachmentPayload, Composer, FileMention};
         let store = Store::new(Runtime::new());
         store.set_prompt_image_preview(true);
-        let payload = AttachmentPayload {
-            mime: "image/png".to_owned(),
-            data: "iVBORw0KGgo=".to_owned(),
-        };
+        let payload =
+            AttachmentPayload { mime: "image/png".to_owned(), data: "iVBORw0KGgo=".to_owned() };
         let mention_chip = |description: Option<&str>| FileMention {
             name: "clipboard".to_owned(),
             description: description.map(str::to_owned),
@@ -17078,12 +17076,7 @@ mod tests {
                 .to_owned(),
             "v21b two long row word word word word word word word word tail".to_owned(),
         ];
-        store.set_plugin_dialog_presentation(
-            Some("large"),
-            false,
-            Some(&wide_rows),
-            "p.tui",
-        );
+        store.set_plugin_dialog_presentation(Some("large"), false, Some(&wide_rows), "p.tui");
         let top = store.top_dialog().expect("the show entry");
         assert_eq!(top.size, DialogSize::Large);
         let rows = store

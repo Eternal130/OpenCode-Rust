@@ -65,10 +65,7 @@ pub fn marquee_overflows(value: &str, width: usize) -> bool {
 // form is the tests' seam.
 #[allow(dead_code)]
 pub fn marquee_text(value: &str, width: usize, offset: usize) -> String {
-    marquee_text_parts(value, width, offset)
-        .iter()
-        .map(|part| part.value.as_str())
-        .collect()
+    marquee_text_parts(value, width, offset).iter().map(|part| part.value.as_str()).collect()
 }
 
 /// One visible window cluster — `value` is the grapheme, `separator`
@@ -541,10 +538,7 @@ mod tests {
             let parts = marquee_text_parts(title, width, offset);
             for part in &parts {
                 let is_dot = part.value == "·";
-                assert_eq!(
-                    part.separator, is_dot,
-                    "offset {offset}: only the · is a separator"
-                );
+                assert_eq!(part.separator, is_dot, "offset {offset}: only the · is a separator");
                 if is_dot {
                     seen_separator = true;
                 }

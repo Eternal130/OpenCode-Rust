@@ -316,6 +316,11 @@ fn elapsed(now: u64, since: u64) -> u64 {
 /// tsx prop setters' effect); every envelope level below derives
 /// purely from a track + the clock.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
+// The ref's track state IS a flat flag set (the tsx props:
+// active/complete/attention/glowing/renaming are independent booleans
+// on the session-tab status); folding them into enums would diverge
+// from the mirrored shape, so the flat bools stay.
+#[allow(clippy::struct_excessive_bools)]
 pub struct TabPulseTrack {
     /// When the busy sweep began (`setActive(true)`).
     pub active_since: Option<u64>,
@@ -487,8 +492,7 @@ impl TabPulseTrack {
         // (the ref's active flag toggled false→true; the port's
         // `active_since` stays set through the release — the G-457
         // retrigger clause).
-        let runs_flipped =
-            self.armed && (runs != was_runs || (runs && self.idle_since.is_some()));
+        let runs_flipped = self.armed && (runs != was_runs || (runs && self.idle_since.is_some()));
         let pulses_changed = self.armed && prompt_pulses != self.prompt_pulses;
         if runs_flipped || pulses_changed {
             self.ignition_since = Some(now);
@@ -527,8 +531,7 @@ impl TabPulseTrack {
     /// duration) blocks a re-arm; after the one-shot decays the next
     /// runs flip re-fires it.
     fn flash_running(&self, now: u64) -> bool {
-        self.flash_since
-            .is_some_and(|(since, _)| elapsed(now, since) < EDGE_FLASH_DURATION)
+        self.flash_since.is_some_and(|(since, _)| elapsed(now, since) < EDGE_FLASH_DURATION)
     }
 
     /// G-479 — the number ignition's level: the 0.85 jump tweened
@@ -1098,11 +1101,18 @@ mod tests {
         assert_eq!(track.ignition_level(200 + IGNITION_DURATION_MS), 0.0, "faded out");
         // The smoothstep shape: a quarter in, the ease has barely
         // moved (3t²−2t³ at 0.25 ≈ 0.156 — vs linear 0.25).
-        assert!((track.ignition_level(200 + 175) - IGNITION_JUMP * (1.0 - smoothstep(0.25))).abs() < 1e-9);
+        assert!(
+            (track.ignition_level(200 + 175) - IGNITION_JUMP * (1.0 - smoothstep(0.25))).abs()
+                < 1e-9
+        );
         // The runs flip retriggers too.
         track.sync(false, false, false, 1, false, false, 1_000);
         assert_eq!(track.ignition_level(1_000), IGNITION_JUMP, "retriggered by the runs flip");
-        assert!((track.ignition_level(1_000 + 50) - IGNITION_JUMP * (1.0 - smoothstep(50.0 / 700.0))).abs() < 1e-9);
+        assert!(
+            (track.ignition_level(1_000 + 50) - IGNITION_JUMP * (1.0 - smoothstep(50.0 / 700.0)))
+                .abs()
+                < 1e-9
+        );
     }
 
     /// The indicator dissolve (`TabIndicator`'s fade,

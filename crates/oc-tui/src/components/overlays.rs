@@ -206,7 +206,11 @@ mod tests {
         assert_eq!(frame.cell(9, 30).bg, dimmed, "below the box stays dimmed");
         // The geometry helper agrees.
         assert_eq!(super::super::overlays_solid::reconnecting_geometry(60, 12).3, 5);
-        assert_eq!(super::super::overlays_solid::reconnecting_geometry(60, 12).1, 4, "the half-up top");
+        assert_eq!(
+            super::super::overlays_solid::reconnecting_geometry(60, 12).1,
+            4,
+            "the half-up top"
+        );
         // G-500 — the register's empirical probe points: H=36→16,
         // H=37→16, H=38→17 (the .5 cases round UP), and the 90% clamp
         // at W=49 rounds the width to 45 (the floor port computed 44).

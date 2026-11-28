@@ -1590,7 +1590,12 @@ mod tests {
     }
 
     /// A payload that does not decode renders the centered muted `No
-    /// preview` fallback (the ref's onError arm).
+    /// preview` fallback (the ref's onError arm). G-500 — the label
+    /// centers through Yoga (`alignItems="center"` +
+    /// `justifyContent="center"`, prompt/index.tsx:1704-1706), whose
+    /// half-up edge rounding puts the 11-wide label's lead at
+    /// `(thumb_w − 11).div_ceil(2)` = 1 in the 12-wide thumb (the
+    /// floor split sat one column left).
     #[test]
     fn preview_strip_no_preview_fallback() {
         let theme = ThemeState::v2_dark();
@@ -1602,6 +1607,12 @@ mod tests {
         // The fallback centers in the thumb box (absolute top = h/2 =
         // 3 → frame row 4, the strip starting at row 1).
         assert!(grid[4].contains("No preview"), "the fallback label centers: {:?}", grid[4]);
+        // G-500 — the half-up lead: the label sits ONE column inside
+        // the thumb box (the box's first cell is the frame's column
+        // 1, right after the rail), not at its left edge.
+        let at = grid[4].find("No preview").expect("the label");
+        let lead = grid[4][..at].chars().count() - 1;
+        assert_eq!(lead, 1, "the half-up centering lead: {:?}", grid[4]);
     }
 
     /// The hit rects: one per visible thumb + the `+N more` cell, in

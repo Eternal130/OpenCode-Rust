@@ -133,7 +133,7 @@ fn spinner_frame(elapsed_ms: u64) -> char {
 /// ROUNDED edges. For an integer box width (the 48 clamp at W ≥ 54)
 /// the left/top reduce to `div_ceil(2)`; for the fractional 90% clamp
 /// (W < 54, not a multiple of 10) the edge model is the only faithful
-/// one — at W=49: w_raw 44.1, x 2.45 → edges [2, 47] → width 45 (the
+/// one — at W=49: `w_raw` 44.1, x 2.45 → edges [2, 47] → width 45 (the
 /// old floor port computed 44 one narrower, its box one row/col high
 /// — the G-477 residue).
 #[must_use]
@@ -146,7 +146,9 @@ pub(crate) fn reconnecting_geometry(width: usize, height: usize) -> (usize, usiz
     let right = round_half_up(x_raw + w_raw);
     let box_width = (right - left).max(1);
     let top_raw = (f64::from(u32::try_from(height).unwrap_or(u32::MAX)) - 5.0) / 2.0;
-    let top = round_half_up(top_raw).max(0);
+    // (H ≥ 5 keeps top_raw ≥ 0 — the half-up round never goes negative;
+    // the clamp against the SHORT-height path rides `h` below.)
+    let top = round_half_up(top_raw);
     let w = box_width.min(width.saturating_sub(left));
     let h = 5.min(height.saturating_sub(top));
     (left, top, w, h)

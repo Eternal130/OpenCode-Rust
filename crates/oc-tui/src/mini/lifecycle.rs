@@ -950,22 +950,25 @@ impl FooterPane {
     /// config/keybind.ts:132). The moves run through
     /// [`FooterMenuState`] so the window offset follows the selection
     /// (`menu.move`/`menu.reveal`, footer.menu.tsx:60-65).
+    // One arm per controller key — the ref's controller is a flat
+    // keydown switch (footer.command.tsx:201-260); splitting it would
+    // scatter the key set the register entry is about.
+    #[allow(clippy::too_many_lines)]
     fn press_panel(&mut self, key: FooterKey) -> Vec<FooterEffect> {
-        use crate::components::footer::state::reconcile_selection;
         use crate::components::footer::panel::footer_panel_layout;
+        use crate::components::footer::state::reconcile_selection;
         let mut effects = Vec::new();
         let count = self.panel_entries().len();
         // G-498 — the panel layout at the LIVE term height
         // (`footerPanelLayout(renderer.terminalHeight, input.limit)`,
         // footer.command.tsx:155-159): the subagent menu's list limit
         // is SUBAGENT_LIST_ROWS (:898), every other panel's 10.
-        let list_limit = if self.machine.route
-            == crate::components::footer::PromptRoute::SubagentMenu
-        {
-            crate::components::footer::state::SUBAGENT_LIST_ROWS
-        } else {
-            crate::components::footer::state::PANEL_LIST_ROWS
-        };
+        let list_limit =
+            if self.machine.route == crate::components::footer::PromptRoute::SubagentMenu {
+                crate::components::footer::state::SUBAGENT_LIST_ROWS
+            } else {
+                crate::components::footer::state::PANEL_LIST_ROWS
+            };
         let limit = footer_panel_layout(self.term_height.get(), list_limit).limit;
         // G-272 — the settings panel's change keys (`onKey`,
         // footer.command.tsx:818-824): left/right step the selected
@@ -986,11 +989,10 @@ impl FooterPane {
             self.machine.route == crate::components::footer::PromptRoute::SubagentMenu;
         // G-498 — the controller's move/reveal pair (the `menu`
         // state's own arms, footer.menu.tsx:60-65).
-        let mut menu =
-            crate::components::footer::panel::FooterMenuState {
-                selected: self.panel.selected,
-                offset: self.panel.offset,
-            };
+        let mut menu = crate::components::footer::panel::FooterMenuState {
+            selected: self.panel.selected,
+            offset: self.panel.offset,
+        };
         match key {
             FooterKey::Escape | FooterKey::CtrlC => {
                 // closePanel → the composer (footer.view.tsx:320-322).
@@ -1087,13 +1089,12 @@ impl FooterPane {
             FooterKey::Backspace => {
                 self.panel.query.pop();
                 self.panel.selected = reconcile_selection(self.panel.selected, count);
-                self.panel.offset =
-                    crate::components::footer::state::reveal_selection_offset(
-                        self.panel.offset,
-                        count,
-                        limit,
-                        self.panel.selected,
-                    );
+                self.panel.offset = crate::components::footer::state::reveal_selection_offset(
+                    self.panel.offset,
+                    count,
+                    limit,
+                    self.panel.selected,
+                );
             }
             FooterKey::Left if settings_route => {
                 effects.extend(self.settings_change(-1));
@@ -1119,13 +1120,12 @@ impl FooterPane {
                     self.leader_armed = false;
                     self.panel.query.push(char);
                     self.panel.selected = reconcile_selection(self.panel.selected, count);
-                    self.panel.offset =
-                        crate::components::footer::state::reveal_selection_offset(
-                            self.panel.offset,
-                            count,
-                            limit,
-                            self.panel.selected,
-                        );
+                    self.panel.offset = crate::components::footer::state::reveal_selection_offset(
+                        self.panel.offset,
+                        count,
+                        limit,
+                        self.panel.selected,
+                    );
                 }
             }
             FooterKey::Enter => {
@@ -1367,9 +1367,15 @@ impl FooterPane {
         };
         use crate::components::footer::state::{fuzzy_matches, PANEL_LIST_ROWS};
         let route = self.machine.route;
+        // G-498 (the panel-family face) — the count visibility per
+        // panel: the ref's Commands and Settings panels pass
+        // `countVisible={false}` (footer.command.tsx:600/:831 — the
+        // PanelShell's default shows the count, :295); the port's
+        // Command route wrongly showed it ("Commands 11" vs the
+        // ref's bare title — the v22a-keys probe export).
         let (title, count_visible, hint, grouped, background, header_color, empty) = match route {
             crate::components::footer::PromptRoute::Command => {
-                ("Commands", true, None, true, true, true, "No results found")
+                ("Commands", false, None, true, true, true, "No results found")
             }
             crate::components::footer::PromptRoute::Agent => {
                 ("Select agent", true, None, false, true, false, "No agents found")
@@ -3568,7 +3574,7 @@ mod tests {
         for ch in "zz".chars() {
             let _ = footer.press(FooterKey::Printable(ch));
         }
-        assert!(!footer.panel.query.is_empty());
+        assert_ne!(footer.panel.query, "", "the typed query staged");
         let _ = footer.press(FooterKey::CtrlU);
         assert_eq!(footer.panel.query, "", "ctrl+u cleared the query");
         assert_eq!(footer.panel.selected, 0, "the menu reset with the query");

@@ -197,7 +197,7 @@ pub fn affordance_text_width(toast: &ToastOptions) -> usize {
 
 /// The toast surfaces' word wrap — the ref title/message texts'
 /// default (`wrapMode: "word"`, ui/toast.tsx:76/90): the seam is the
-/// opentui text buffer's LAYOUT-WRAP break set (text_buffer.rs
+/// opentui text buffer's LAYOUT-WRAP break set (`text_buffer.rs`
 /// `ascii_break_kind` — the port of utf8.zig:159-165): whitespace
 /// PLUS the punctuation family `- / \ . , ; : ! ? ( ) [ ] { }`,
 /// each closing its token (the break char stays with its token — a
@@ -213,8 +213,22 @@ pub fn affordance_text_width(toast: &ToastOptions) -> usize {
 fn toast_break_after(ch: char) -> bool {
     matches!(
         ch,
-        ' ' | '\t' | '-' | '/' | '\\' | '.' | ',' | ';' | ':' | '!' | '?' | '(' | ')' | '['
-            | ']' | '{' | '}'
+        ' ' | '\t'
+            | '-'
+            | '/'
+            | '\\'
+            | '.'
+            | ','
+            | ';'
+            | ':'
+            | '!'
+            | '?'
+            | '('
+            | ')'
+            | '['
+            | ']'
+            | '{'
+            | '}'
     ) || crate::wrap::is_break_after(ch)
 }
 
