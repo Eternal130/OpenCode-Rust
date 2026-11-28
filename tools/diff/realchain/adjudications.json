@@ -1030,6 +1030,38 @@
       "g_ref": "framework-diff (capture phase)",
       "adjudicated_by": "controller",
       "adjudicated_at": "2026-11-28"
+    },
+    {
+      "id": "v22a-keys-registered-families",
+      "scenario_pattern": "v22a-keys",
+      "state_pattern": "*",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "(?:Commands|Search|Session|Open editor|Show status|Compact session|New session|Agent|Switch |Variant cycle|System|Clear screen|Settings|Exit|sett|┃|Ask anything|Build ·|replay/|ctrl\\+p menu|█|▀|▄)|__ROOT__|shift\\+tab"
+        ]
+      },
+      "classification": "pending-fix",
+      "justification": "ADJUDICATED (controller 2026-11-28): the va22a keys anchor (10 states) decomposed by the controller into REGISTERED families only — G-489 (the composer/statusline seating: the panel rows sit at 5-18 on the ref vs 21-34 on the port, so every list row appears as an offset pair), G-490 (the model/provider label arms), G-565 (the query 'sett' match set + order), G-566 (the End window's System group). The 271-row census (with the preview family) found no other shape. Tip-only entry: stale when those close — the states must then export EXACT. Evidence: .test-logs/diff-reports/v22a-keys-*.txt",
+      "g_ref": "G-489/G-490/G-565/G-566",
+      "adjudicated_by": "controller",
+      "adjudicated_at": "2026-11-28"
+    },
+    {
+      "id": "v22a-preview-registered-families",
+      "scenario_pattern": "v22a-preview",
+      "state_pattern": "*",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "(?:┃|Ask anything|Build ·|replay/|ctrl\\+p menu|█|▀|▄|\\[Image)|__ROOT__|shift\\+tab"
+        ]
+      },
+      "classification": "pending-fix",
+      "justification": "ADJUDICATED (controller 2026-11-28): the va22a preview anchor (3 states: strip-on / pasted-twice / no-preview-fallback) decomposed by the controller into REGISTERED families only — G-489 (seating), G-490 (label arms), G-564 (the strip-on thumb geometry + arrangement, rendered for the first time via the corrected cli.json path; also the No-preview leg's label offset riding the same strip geometry). pasted-twice's reachable chips row is identical on both ends (G-504's face). Tip-only entry: stale when those close. Evidence: .test-logs/diff-reports/v22a-preview-*.txt",
+      "g_ref": "G-489/G-490/G-564",
+      "adjudicated_by": "controller",
+      "adjudicated_at": "2026-11-28"
     }
   ]
 }
