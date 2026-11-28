@@ -98,10 +98,10 @@ pub struct App {
     /// (pin the sampled instant); `None` = the live path samples the
     /// real wall clock at dispatch. The sample must NOT ride the
     /// store clock: `advance_clock` only moves at the run loop's
-    /// >= 100 ms ticks, so a store-clock sample under-counts a press
-    /// interval by up to one tick spacing under load and fires
-    /// double/triple-click classifications the ref (which reads the
-    /// real clock at dispatch) would not.
+    /// tick cadence (100 ms or more), so a store-clock sample
+    /// under-counts a press interval by up to one tick spacing under
+    /// load and fires double/triple-click classifications the ref
+    /// (which reads the real clock at dispatch) would not.
     selection_clock_override: Option<u64>,
     /// TUI-16 — the last drawn frame (the selection's text source).
     pub last_frame: Option<crate::render::Frame>,
@@ -578,7 +578,7 @@ impl App {
     /// G-596 — the multi-click window's clock sample: the DISPATCH
     /// time, never the tick-sampled store time. The ref reads the
     /// real clock at dispatch (`nextClickBehavior`,
-    /// renderer.ts:4976 — `SystemClock` = performance.now(),
+    /// renderer.ts:4976 — `SystemClock` = `performance.now()`,
     /// lib/clock.ts:11-19); the port's store clock only moves when
     /// the run loop's tick block calls `advance_clock` (>= 100 ms
     /// cadence), so under load it under-counts a press interval by

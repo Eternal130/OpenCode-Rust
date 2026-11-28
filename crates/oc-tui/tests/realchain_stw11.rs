@@ -185,8 +185,8 @@ fn boot_both(rig: &mut Stw11Rig) {
     // historical form, never a flake in weeks of gates) keeps this
     // anchor off that window.
     let (rust_ask, ref_ask) = std::thread::scope(|scope| {
-        let rust_leg = scope
-            .spawn(|| rig.rust_tui.wait_for_screen("Ask anything", Duration::from_secs(10)));
+        let rust_leg =
+            scope.spawn(|| rig.rust_tui.wait_for_screen("Ask anything", Duration::from_secs(10)));
         let ref_leg =
             scope.spawn(|| rig.ref_tui.wait_for_screen("Ask anything", Duration::from_secs(15)));
         (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
@@ -256,13 +256,10 @@ fn style_map(tui: &TuiProcess, reply_row: usize) -> String {
             let mut classes: Vec<u64> = Vec::new();
             for col in 0..cols {
                 let digest = screen.cell(row, col).map_or(0, cell_style_digest);
-                let class = classes
-                    .iter()
-                    .position(|&seen| seen == digest)
-                    .unwrap_or_else(|| {
-                        classes.push(digest);
-                        classes.len() - 1
-                    });
+                let class = classes.iter().position(|&seen| seen == digest).unwrap_or_else(|| {
+                    classes.push(digest);
+                    classes.len() - 1
+                });
                 line.push(class_letter(class));
             }
         }
@@ -347,16 +344,16 @@ fn stw11_doubleclick_word_select_pair() {
     // hyphen-segment).
     let rust_anchor = find_needle(&rig.rust_tui, "REALCHAIN-REPLAY-OK");
     let ref_anchor = find_needle(&rig.ref_tui, "REALCHAIN-REPLAY-OK");
-    let (rust_toast, rust_reply_row) = rust_anchor
-        .map_or((false, 0), |(x, y)| word_select_until_toast(&mut rig.rust_tui, x, y));
+    let (rust_toast, rust_reply_row) =
+        rust_anchor.map_or((false, 0), |(x, y)| word_select_until_toast(&mut rig.rust_tui, x, y));
     std::thread::sleep(Duration::from_millis(300));
     let rust_grid = format!(
         "{}== style map (reply row ±1) ==\n{}",
         rig.rust_tui.screen_text(),
         style_map(&rig.rust_tui, rust_reply_row)
     );
-    let (ref_toast, ref_reply_row) = ref_anchor
-        .map_or((false, 0), |(x, y)| word_select_until_toast(&mut rig.ref_tui, x, y));
+    let (ref_toast, ref_reply_row) =
+        ref_anchor.map_or((false, 0), |(x, y)| word_select_until_toast(&mut rig.ref_tui, x, y));
     std::thread::sleep(Duration::from_millis(300));
     let ref_grid = format!(
         "{}== style map (reply row ±1) ==\n{}",
@@ -377,19 +374,10 @@ fn stw11_doubleclick_word_select_pair() {
         rust_replied && ref_replied,
         "STW11 RED (rig): reply did not settle rust={rust_replied} ref={ref_replied}"
     );
-    assert!(
-        rust_anchor.is_some(),
-        "STW11 RED (rig): the rust reply needle left the grid"
-    );
-    assert!(
-        ref_anchor.is_some(),
-        "STW11 RED (rig): the ref reply needle left the grid"
-    );
+    assert!(rust_anchor.is_some(), "STW11 RED (rig): the rust reply needle left the grid");
+    assert!(ref_anchor.is_some(), "STW11 RED (rig): the ref reply needle left the grid");
     // REF-side scenario-content sanity ONLY (W12: the ref toast is
     // the rig's proof the burst double-clicked and the release
     // resolved the word selection over selectable text).
-    assert!(
-        ref_toast,
-        "STW11 RED (ref-side sanity): the ref copy toast never painted"
-    );
+    assert!(ref_toast, "STW11 RED (ref-side sanity): the ref copy toast never painted");
 }
